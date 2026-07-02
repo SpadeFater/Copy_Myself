@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "copy-myself"
+version = "0.1.0"
+description = "A LangGraph-based personal butler agent foundation."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "langgraph>=0.2.0",
+    "PyQt6>=6.7.0",
+    "pydantic-settings>=2.4.0",
+    "uvicorn[standard]>=0.30.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "httpx>=0.27.0",
+    "pytest>=8.0",
+]
+
+[project.scripts]
+copy-myself = "copy_myself.cli:main"
+copy-myself-api = "copy_myself.api.app:main"
+copy-myself-gui = "copy_myself.gui.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-ra"

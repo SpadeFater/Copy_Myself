@@ -1,0 +1,38 @@
+# Python caches and build outputs
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Local environments and secrets
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+env/
+
+# IDE and OS state
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Retired or accidental frontend artifacts
+node_modules/
+frontend/dist/
+frontend/build/
+web/dist/
+web/build/
+/docs/
+/*.md
+!/README.md
+!/CONTRIBUTING.md
