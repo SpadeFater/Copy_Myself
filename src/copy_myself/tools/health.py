@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from copy_myself.tools.base import ToolResult
+from copy_myself.tools.base import LocalTool, ToolResult
 
 
-class HealthTool:
+class HealthTool(LocalTool):
     name = "health"
     description = "Reports whether the local agent foundation is reachable."
 

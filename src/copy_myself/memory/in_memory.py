@@ -24,3 +24,9 @@ class InMemoryStore:
                 if needle in record[1].lower() or needle in record[0].lower()
             ]
         return [f"{role}: {content}" for role, content in matches[-limit:]]
+
+    def list_recent(self, limit: int = 20) -> list[str]:
+        return [f"{role}: {content}" for role, content in self._records[-limit:]]
+
+    def get_brief_context(self, query: str = "") -> list[str]:
+        return self.search("", limit=5)
