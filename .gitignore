@@ -19,9 +19,6 @@ dist/
 .venv/
 venv/
 env/
-/memory/
-/keys
-keys
 
 # IDE and OS state
 .idea/
@@ -35,8 +32,3 @@ frontend/dist/
 frontend/build/
 web/dist/
 web/build/
-
-# Local root-level notes
-/*.md
-!/README.md
-!/CONTRIBUTING.md

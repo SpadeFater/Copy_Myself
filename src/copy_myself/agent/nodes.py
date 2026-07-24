@@ -1,83 +1,23 @@
 from __future__ import annotations
 
-import json
-from typing import Any
-
 from copy_myself.agent.state import ButlerState
+from copy_myself.llm.base import ChatMessage, ModelClient
 from copy_myself.memory.base import MemoryStore
-from copy_myself.model_adapter import ChatResponder, LocalFallbackResponder
 from copy_myself.tools.registry import ToolRegistry
 
 
-def classify_intent(
-    state: ButlerState,
-    registry: ToolRegistry | None = None,
-    responder: ChatResponder | None = None,
-) -> ButlerState:
+def classify_intent(state: ButlerState) -> ButlerState:
     text = state["user_input"].strip().lower()
     if text in {"health", "health check", "健康检查"} or "健康检查" in text:
         state["intent"] = "health_check"
         state["tool_name"] = "health"
-        state["tool_arguments"] = {}
-        return state
-
-    if registry is not None and responder is not None:
-        selected = _select_tool_with_model(state["user_input"], registry, responder)
-        if selected is not None:
-            state["intent"] = "tool"
-            state["tool_name"] = selected["tool_name"]
-            state["tool_arguments"] = selected["arguments"]
-            return state
-
-    state["intent"] = "chat"
-    state["tool_name"] = None
-    state["tool_arguments"] = {}
+    else:
+        state["intent"] = "chat"
+        state["tool_name"] = None
     return state
 
 
-def _select_tool_with_model(
-    user_input: str,
-    registry: ToolRegistry,
-    responder: ChatResponder,
-) -> dict[str, Any] | None:
-    catalog = registry.catalog()
-    if not catalog:
-        return None
-
-    tool_lines = "\n".join(f"- {item.name}: {item.description}" for item in catalog)
-    prompt = (
-        "Choose the best tool for the user request from this tool catalog.\n"
-        "Return only JSON with this shape: "
-        '{"tool_name": "name-or-null", "arguments": {}}.\n'
-        'If no tool fits, return {"tool_name": null, "arguments": {}}.\n\n'
-        f"Tool catalog:\n{tool_lines}\n\n"
-        f"User request:\n{user_input}"
-    )
-    try:
-        payload = json.loads(responder.generate(prompt, []))
-    except Exception:
-        return None
-
-    tool_name = payload.get("tool_name")
-    arguments = payload.get("arguments", {})
-    if not isinstance(tool_name, str) or tool_name not in registry.names():
-        return None
-    if not isinstance(arguments, dict):
-        arguments = {}
-    return {"tool_name": tool_name, "arguments": arguments}
-
-
 def load_memory_context(state: ButlerState, memory: MemoryStore) -> ButlerState:
-    brief_context_getter = getattr(memory, "get_brief_context", None)
-    if callable(brief_context_getter):
-        try:
-            brief_context = brief_context_getter(state["user_input"])
-        except TypeError:
-            brief_context = brief_context_getter()
-        if brief_context:
-            state["memory_context"] = brief_context
-            return state
-
     state["memory_context"] = memory.search(state["user_input"], limit=5)
     return state
 
@@ -87,9 +27,7 @@ def run_selected_tool(state: ButlerState, registry: ToolRegistry) -> ButlerState
     if tool_name is None:
         return state
 
-    arguments = {"source": "agent"}
-    arguments.update(state.get("tool_arguments", {}))
-    result = registry.run(tool_name, arguments)
+    result = registry.run(tool_name, {"source": "agent"})
     if result.ok:
         state["tool_result"] = result.data
         state["error"] = None
@@ -99,22 +37,41 @@ def run_selected_tool(state: ButlerState, registry: ToolRegistry) -> ButlerState
     return state
 
 
-def create_response(
-    state: ButlerState,
-    responder: ChatResponder | None = None,
-) -> ButlerState:
+def _build_model_messages(state: ButlerState) -> list[ChatMessage]:
+    messages: list[ChatMessage] = [
+        {
+            "role": "system",
+            "content": (
+                "You are Copy_Myself, a local-first personal butler agent. "
+                "Answer in the user's language, stay concise, and use memory when relevant."
+            ),
+        }
+    ]
+    if state["memory_context"]:
+        messages.append(
+            {
+                "role": "system",
+                "content": "Relevant memory:\n" + "\n".join(state["memory_context"]),
+            }
+        )
+    messages.append({"role": "user", "content": state["user_input"]})
+    return messages
+
+
+def create_response(state: ButlerState, model_client: ModelClient | None = None) -> ButlerState:
     if state.get("error"):
         state["response"] = f"暂时无法完成这个请求：{state['error']}"
     elif state.get("tool_result"):
         state["response"] = f"工具调用完成：{state['tool_result']}"
-    else:
-        chat_responder = responder or LocalFallbackResponder()
+    elif state.get("intent") == "chat" and model_client is not None:
         try:
-            state["response"] = chat_responder.generate(
-                state["user_input"],
-                state.get("memory_context", []),
-            )
+            state["response"] = model_client.complete(_build_model_messages(state))
         except Exception as exc:
             state["error"] = str(exc)
-            state["response"] = f"模型调用失败：{exc}"
+            state["response"] = "模型连接失败，已回退到本地响应。"
+    else:
+        state["response"] = (
+            "我已收到你的请求。当前项目框架已预留意图识别、工具调用和记忆接口，"
+            "后续可以在这些接口上继续扩展具体个人管家能力。"
+        )
     return state

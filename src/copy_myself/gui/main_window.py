@@ -1,148 +1,329 @@
 from __future__ import annotations
 
-from pathlib import Path
-
-from PyQt6.QtCore import QObject, QRunnable, QSize, Qt, QThreadPool, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QFontMetrics, QPixmap
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
-    QDialogButtonBox,
     QFrame,
     QHBoxLayout,
+    QFormLayout,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
     QPushButton,
-    QScrollArea,
     QSizePolicy,
-    QTextEdit,
+    QTabWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
-from copy_myself.agent.graph import build_default_registry, stream_agent
 from copy_myself.config import (
-    McpServiceSettings,
-    ModelSettings,
+    import_mcp_service_setting,
+    import_model_provider_setting,
     list_mcp_service_settings,
-    list_model_settings,
+    list_model_provider_settings,
     load_settings,
-    save_mcp_service_settings,
-    save_model_settings,
-    switch_active_model,
 )
 from copy_myself.gui.view_model import ChatMessage, RunSummary, WorkbenchViewModel
 
 
-BRAND_LOGO_PATH = Path(__file__).with_name("assets") / "brand_c.png"
+class MemoryDialog(QDialog):
+    def __init__(self, view_model: WorkbenchViewModel, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._view_model = view_model
+        self.context_list = QListWidget()
+        self.message_list = QListWidget()
+
+        self.setWindowTitle("完整记忆")
+        self.setModal(False)
+        self.resize(760, 520)
+        self._build_ui()
+        self.refresh()
+
+    def _build_ui(self) -> None:
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 20, 20, 20)
+        root.setSpacing(14)
+
+        title = QLabel("完整记忆")
+        title.setObjectName("DialogTitle")
+        subtitle = QLabel("点击查看，不占用主工作台空间")
+        subtitle.setObjectName("DialogSubtitle")
+        root.addWidget(title)
+        root.addWidget(subtitle)
+
+        context_label = QLabel("本次运行记忆")
+        context_label.setObjectName("SectionTitle")
+        root.addWidget(context_label)
+        root.addWidget(self.context_list, stretch=1)
+
+        message_label = QLabel("近期对话")
+        message_label.setObjectName("SectionTitle")
+        root.addWidget(message_label)
+        root.addWidget(self.message_list, stretch=1)
+
+        footer = QHBoxLayout()
+        footer.addStretch()
+        close_button = QPushButton("关闭")
+        close_button.clicked.connect(self.close)
+        footer.addWidget(close_button)
+        root.addLayout(footer)
+
+    def refresh(self) -> None:
+        self.context_list.clear()
+        context = self._view_model.latest_run.memory_context if self._view_model.latest_run else []
+        if context:
+            self.context_list.addItems(context)
+        else:
+            self.context_list.addItem("暂无记忆内容")
+
+        self.message_list.clear()
+        for message in self._view_model.messages[-10:]:
+            speaker = "我" if message.role == "user" else "Copy_Myself"
+            self.message_list.addItem(f"{speaker}: {message.content}")
 
 
-class BrandLogo(QFrame):
-    def __init__(self) -> None:
-        super().__init__()
-        self.setObjectName("BrandLogo")
-        self.setFixedSize(64, 64)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        self.image_label = QLabel()
-        self.image_label.setObjectName("BrandLogoImage")
-        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.image_label.setScaledContents(False)
-        self._load_logo()
-        layout.addWidget(self.image_label)
+class SettingsDialog(QDialog):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.current_model_value = QLabel()
+        self.current_model_source = QLabel()
+        self.model_name_input = QLineEdit()
+        self.model_url_input = QLineEdit()
+        self.model_id_input = QLineEdit()
+        self.model_api_key_input = QLineEdit()
+        self.model_provider_input = QLineEdit("openai-compatible")
+        self.import_model_button = QPushButton("导入模型")
+        self.model_providers = QListWidget()
+        self.mcp_name_input = QLineEdit()
+        self.mcp_url_input = QLineEdit()
+        self.mcp_transport_input = QComboBox()
+        self.mcp_command_input = QLineEdit()
+        self.mcp_args_input = QLineEdit()
+        self.import_mcp_button = QPushButton("导入外部 MCP")
+        self.mcp_services = QListWidget()
+        self.tabs = QTabWidget()
 
-    def _load_logo(self) -> None:
-        pixmap = QPixmap(str(BRAND_LOGO_PATH))
-        if pixmap.isNull():
-            self.image_label.setText("CM")
-            return
-        scaled = pixmap.scaled(
-            QSize(64, 64),
-            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-            Qt.TransformationMode.SmoothTransformation,
+        self.setWindowTitle("设置")
+        self.setModal(False)
+        self.resize(720, 520)
+
+        self._build_ui()
+        self.refresh()
+        self.import_model_button.clicked.connect(self._import_model)
+        self.import_mcp_button.clicked.connect(self._import_mcp_service)
+
+    def _build_ui(self) -> None:
+        root = QVBoxLayout(self)
+        root.setContentsMargins(12, 12, 12, 12)
+        root.setSpacing(8)
+
+        title = QLabel("设置")
+        title.setObjectName("DialogTitle")
+        subtitle = QLabel("模型、外部 MCP 与运行入口统一收纳")
+        subtitle.setObjectName("DialogSubtitle")
+        root.addWidget(title)
+        root.addWidget(subtitle)
+
+        model_status = QFrame()
+        model_status.setObjectName("SettingsStatus")
+        model_status_layout = QHBoxLayout(model_status)
+        model_status_layout.setContentsMargins(12, 8, 12, 8)
+        model_status_layout.setSpacing(10)
+        status_text = QLabel("当前模型")
+        status_text.setObjectName("SectionTitle")
+        status_column = QVBoxLayout()
+        status_column.setContentsMargins(0, 0, 0, 0)
+        status_column.setSpacing(2)
+        status_column.addWidget(self.current_model_value)
+        status_column.addWidget(self.current_model_source)
+        model_status_layout.addWidget(status_text)
+        model_status_layout.addLayout(status_column)
+        model_status_layout.addStretch()
+        root.addWidget(model_status)
+
+        model_tab = QWidget()
+        model_layout = QVBoxLayout(model_tab)
+        model_layout.setContentsMargins(0, 0, 0, 0)
+        model_layout.setSpacing(6)
+
+        model_form = QFrame()
+        model_form_layout = QFormLayout(model_form)
+        model_form_layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+        model_form_layout.setFormAlignment(Qt.AlignmentFlag.AlignTop)
+        self.model_name_input.setPlaceholderText("显示名称，例如 Local Qwen")
+        self.model_url_input.setPlaceholderText("URL，例如 http://127.0.0.1:11434/v1")
+        self.model_id_input.setPlaceholderText("模型名字，例如 qwen2.5:7b 或 gpt-4.1-mini")
+        self.model_api_key_input.setPlaceholderText("API Key，可留空")
+        self.model_api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.model_provider_input.setPlaceholderText("提供方类型，例如 openai-compatible")
+        model_form_layout.addRow("名称", self.model_name_input)
+        model_form_layout.addRow("URL", self.model_url_input)
+        model_form_layout.addRow("模型", self.model_id_input)
+        model_form_layout.addRow("API Key", self.model_api_key_input)
+        model_form_layout.addRow("提供方", self.model_provider_input)
+        model_layout.addWidget(model_form)
+        model_layout.addWidget(self.import_model_button)
+        self.model_providers.setMaximumHeight(88)
+        model_layout.addWidget(self.model_providers)
+
+        mcp_tab = QWidget()
+        mcp_layout = QVBoxLayout(mcp_tab)
+        mcp_layout.setContentsMargins(0, 0, 0, 0)
+        mcp_layout.setSpacing(6)
+
+        mcp_form = QFrame()
+        mcp_form_layout = QFormLayout(mcp_form)
+        mcp_form_layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+        mcp_form_layout.setFormAlignment(Qt.AlignmentFlag.AlignTop)
+        self.mcp_name_input.setPlaceholderText("服务名称，例如 Filesystem MCP")
+        self.mcp_url_input.setPlaceholderText("URL 或 endpoint，例如 http://127.0.0.1:3000/mcp")
+        self.mcp_transport_input.addItems(["stdio", "http", "sse"])
+        self.mcp_command_input.setPlaceholderText("命令，可留空，例如 npx")
+        self.mcp_args_input.setPlaceholderText("参数，可留空，用空格分隔")
+        mcp_form_layout.addRow("名称", self.mcp_name_input)
+        mcp_form_layout.addRow("URL", self.mcp_url_input)
+        mcp_form_layout.addRow("传输", self.mcp_transport_input)
+        mcp_form_layout.addRow("命令", self.mcp_command_input)
+        mcp_form_layout.addRow("参数", self.mcp_args_input)
+        mcp_layout.addWidget(mcp_form)
+        mcp_layout.addWidget(self.import_mcp_button)
+        self.mcp_services.setMaximumHeight(88)
+        mcp_layout.addWidget(self.mcp_services)
+
+        self.tabs.addTab(model_tab, "模型")
+        self.tabs.addTab(mcp_tab, "MCP")
+        root.addWidget(self.tabs, stretch=1)
+
+        footer = QHBoxLayout()
+        footer.addStretch()
+        close_button = QPushButton("关闭")
+        close_button.clicked.connect(self.close)
+        footer.addWidget(close_button)
+        root.addLayout(footer)
+
+    def _section_frame(self, title: str, description: str) -> QFrame:
+        frame = QFrame()
+        frame.setObjectName("SettingsSection")
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(8)
+
+        label = QLabel(title)
+        label.setObjectName("SectionTitle")
+        text = QLabel(description)
+        text.setObjectName("SectionHint")
+        text.setWordWrap(True)
+        layout.addWidget(label)
+        layout.addWidget(text)
+        return frame
+
+    def refresh(self) -> None:
+        settings = load_settings()
+        self.current_model_value.setObjectName("CurrentModelValue")
+        self.current_model_source.setObjectName("ModelSourceValue")
+        self.current_model_value.setText(f"当前模型: {settings.model_name}")
+        self.current_model_source.setText(
+            f"配置值: {settings.configured_model_name} · 来源: {settings.model.source}"
         )
-        self.image_label.setPixmap(scaled)
+        self.tabs.setCurrentIndex(min(self.tabs.currentIndex(), self.tabs.count() - 1))
+        self._refresh_model_providers()
+        self._refresh_mcp_services()
 
-
-class AgentWorkerSignals(QObject):
-    chunk = pyqtSignal(str)
-    finished = pyqtSignal(str, object)
-    failed = pyqtSignal(str, str)
-
-
-class AgentWorker(QRunnable):
-    def __init__(self, message: str, view_model: WorkbenchViewModel) -> None:
-        super().__init__()
-        self.message = message
-        self.view_model = view_model
-        self.signals = AgentWorkerSignals()
-
-    @pyqtSlot()
-    def run(self) -> None:
-        try:
-            final_state = None
-            for event in stream_agent(self.message, memory=self.view_model.memory):
-                if event.kind == "chunk":
-                    self.signals.chunk.emit(event.content)
-                elif event.kind == "done":
-                    final_state = event.state
-            if final_state is None:
-                raise RuntimeError("Agent stream ended without a final state.")
-        except Exception as exc:
-            self.signals.failed.emit(self.message, str(exc))
+    def _refresh_model_providers(self) -> None:
+        self.model_providers.clear()
+        providers = list_model_provider_settings()
+        if not providers:
+            self.model_providers.addItem("暂无已导入模型")
             return
-        self.signals.finished.emit(self.message, final_state)
+        for provider in providers:
+            self.model_providers.addItem(f"{provider.name} · {provider.model_name} · {provider.base_url}")
+
+    def _refresh_mcp_services(self) -> None:
+        self.mcp_services.clear()
+        services = list_mcp_service_settings()
+        if not services:
+            self.mcp_services.addItem("暂无已导入的 MCP 服务")
+            return
+        for service in services:
+            self.mcp_services.addItem(f"{service.name} · {service.transport} · {service.endpoint}")
+
+    def _import_model(self) -> None:
+        name = self.model_name_input.text().strip()
+        base_url = self.model_url_input.text().strip()
+        model_name = self.model_id_input.text().strip()
+        if not name or not base_url or not model_name:
+            return
+        import_model_provider_setting(
+            name=name,
+            base_url=base_url,
+            model_name=model_name,
+            api_key=self.model_api_key_input.text().strip(),
+            provider=self.model_provider_input.text().strip() or "openai-compatible",
+        )
+        for field in (
+            self.model_name_input,
+            self.model_url_input,
+            self.model_id_input,
+            self.model_api_key_input,
+        ):
+            field.clear()
+        self.refresh()
+
+    def _import_mcp_service(self) -> None:
+        name = self.mcp_name_input.text().strip()
+        endpoint = self.mcp_url_input.text().strip()
+        if not name or not endpoint:
+            return
+        args = tuple(part for part in self.mcp_args_input.text().split() if part)
+        import_mcp_service_setting(
+            endpoint,
+            name=name,
+            transport=self.mcp_transport_input.currentText(),
+            command=self.mcp_command_input.text().strip(),
+            args=args,
+        )
+        for field in (
+            self.mcp_name_input,
+            self.mcp_url_input,
+            self.mcp_command_input,
+            self.mcp_args_input,
+        ):
+            field.clear()
+        self.refresh()
 
 
 class MainWindow(QMainWindow):
     def __init__(self, view_model: WorkbenchViewModel | None = None) -> None:
         super().__init__()
         self.view_model = view_model or WorkbenchViewModel()
-        self.tool_registry = build_default_registry()
         self.setWindowTitle("Copy_Myself")
-        self.resize(1240, 780)
+        self.resize(1260, 800)
 
-        self.workbench_button = QPushButton("工作台")
-        self.complete_memory_button = QPushButton("记忆")
-        self.settings_button = QPushButton("设置")
-        self.new_session_button = QPushButton("新会话")
+        self.nav_buttons: dict[str, QPushButton] = {}
+        self.tool_buttons: dict[str, QToolButton] = {}
+        self.memory_dialog: MemoryDialog | None = None
+        self.settings_dialog: SettingsDialog | None = None
+
         self.chat_list = QListWidget()
         self.input_box = QLineEdit()
         self.send_button = QPushButton("发送")
-        self.intent_value = QLabel("待命")
-        self.steps_list = QListWidget()
+        self.status_value = QLabel("standby")
+        self.execution_list = QListWidget()
         self.plan_list = QListWidget()
-        self.tools_list = QListWidget()
-        self.tool_result = QTextEdit()
-        self.memory_context = QListWidget()
-        self.complete_memory = QListWidget()
-        self.model_switch_combo = QComboBox()
-        self.model_input = QLineEdit()
-        self.base_url_input = QLineEdit()
-        self.api_key_input = QLineEdit()
-        self.save_settings_button = QPushButton("保存模型配置")
-        self.settings_status = QLabel("")
-        self.mcp_name_input = QLineEdit()
-        self.mcp_endpoint_input = QLineEdit()
-        self.import_mcp_button = QPushButton("导入 MCP")
-        self.mcp_status = QLabel("")
-        self.mcp_services_list = QListWidget()
-        self.thread_pool = QThreadPool.globalInstance()
+        self.intent_value = QLabel("standby")
+        self.tool_entry_label = QLabel("可调用工具")
 
         self._build_ui()
         self._connect_events()
-        self._load_model_settings()
-        self._refresh_mcp_services()
         self._refresh_messages()
         self._refresh_inspector(None)
-        self._show_workbench()
 
     def _build_ui(self) -> None:
         root = QWidget()
-        root.setObjectName("Root")
         root_layout = QHBoxLayout(root)
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
@@ -157,146 +338,103 @@ class MainWindow(QMainWindow):
     def _build_sidebar(self) -> QWidget:
         sidebar = QFrame()
         sidebar.setObjectName("Sidebar")
-        sidebar.setFixedWidth(220)
+        sidebar.setFixedWidth(230)
         layout = QVBoxLayout(sidebar)
         layout.setContentsMargins(18, 20, 18, 20)
         layout.setSpacing(14)
 
-        brand_row = QHBoxLayout()
-        brand_row.setSpacing(12)
-        brand_row.addWidget(BrandLogo())
         brand = QLabel("Copy_Myself")
         brand.setObjectName("Brand")
-        brand_row.addWidget(brand, stretch=1)
-        layout.addLayout(brand_row)
+        layout.addWidget(brand)
 
-        layout.addSpacing(12)
-        layout.addWidget(self.workbench_button)
-        layout.addWidget(self.complete_memory_button)
-        layout.addWidget(self.settings_button)
+        nav_section = QLabel("导航")
+        nav_section.setObjectName("SidebarSection")
+        layout.addWidget(nav_section)
+
+        for text in ("工作台", "记忆", "设置"):
+            button = QPushButton(text)
+            button.setObjectName("SidebarButton")
+            button.setCheckable(True)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.clicked.connect(lambda checked=False, name=text: self._handle_nav_click(name))
+            layout.addWidget(button)
+            self.nav_buttons[text] = button
+
+        self.nav_buttons["工作台"].setChecked(True)
         layout.addStretch()
         return sidebar
 
     def _build_center_panel(self) -> QWidget:
         panel = QWidget()
-        panel.setObjectName("CenterPanel")
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(24, 22, 24, 22)
-        layout.setSpacing(14)
+        layout.setSpacing(16)
 
-        self.workbench_panel = self._build_workbench_panel()
-        self.settings_panel = self._build_settings_scroll_area()
-        layout.addWidget(self.workbench_panel)
-        layout.addWidget(self.settings_panel)
-        return panel
+        header = QFrame()
+        header.setObjectName("HeaderBand")
+        header_layout = QVBoxLayout(header)
+        header_layout.setContentsMargins(18, 18, 18, 18)
+        header_layout.setSpacing(8)
 
-    def _build_settings_scroll_area(self) -> QScrollArea:
-        scroll_area = QScrollArea()
-        scroll_area.setObjectName("SettingsScrollArea")
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll_area.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        scroll_area.setMinimumSize(0, 0)
-        scroll_area.setWidget(self._build_settings_panel())
-        return scroll_area
-
-    def _build_workbench_panel(self) -> QWidget:
-        panel = QWidget()
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(14)
-
-        title = QLabel("Copy_Myself 工作台")
+        title_row = QHBoxLayout()
+        title = QLabel("工作台")
         title.setObjectName("Title")
-        layout.addWidget(title)
-
-        subtitle = QLabel("对话在中心，执行阶段、计划和工具在右侧，记忆只通过左侧按钮打开。")
+        subtitle = QLabel("科幻蓝执行面板")
         subtitle.setObjectName("Subtitle")
-        layout.addWidget(subtitle)
+        title_row.addWidget(title)
+        title_row.addStretch()
+        title_row.addWidget(subtitle)
+        header_layout.addLayout(title_row)
 
+        action_row = QHBoxLayout()
+        action_row.setSpacing(10)
+        self.tool_entry_label.setObjectName("PanelTitle")
+        action_row.addWidget(self.tool_entry_label)
+
+        for text in ("内置工具", "MCP 调用"):
+            button = QToolButton()
+            button.setText(text)
+            button.setObjectName("ToolChip")
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            action_row.addWidget(button)
+            self.tool_buttons[text] = button
+
+        action_row.addStretch()
+        header_layout.addLayout(action_row)
+        layout.addWidget(header)
+
+        stage_band = QFrame()
+        stage_band.setObjectName("StageBand")
+        stage_layout = QHBoxLayout(stage_band)
+        stage_layout.setContentsMargins(18, 16, 18, 16)
+        stage_layout.setSpacing(12)
+
+        stage_label = QLabel("当前阶段")
+        stage_label.setObjectName("PanelTitle")
+        self.status_value.setObjectName("StatusValue")
+        stage_layout.addWidget(stage_label)
+        stage_layout.addWidget(self.status_value)
+        stage_layout.addStretch()
+        layout.addWidget(stage_band)
+
+        chat_label = QLabel("对话")
+        chat_label.setObjectName("PanelTitle")
+        layout.addWidget(chat_label)
         self.chat_list.setObjectName("ChatList")
-        self.chat_list.setWordWrap(True)
-        self.chat_list.setUniformItemSizes(False)
         self.chat_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         layout.addWidget(self.chat_list, stretch=1)
 
-        composer = QHBoxLayout()
-        composer.setSpacing(10)
-        self.input_box.setPlaceholderText("向 Copy_Myself 发送指令...")
-        composer.addWidget(self.input_box, stretch=1)
-        composer.addWidget(self.send_button)
-        layout.addLayout(composer)
+        composer = QFrame()
+        composer.setObjectName("Composer")
+        composer_layout = QHBoxLayout(composer)
+        composer_layout.setContentsMargins(16, 16, 16, 16)
+        composer_layout.setSpacing(10)
+        self.input_box.setPlaceholderText("告诉 Copy_Myself 你想处理什么...")
+        composer_layout.addWidget(self.input_box, stretch=1)
+        composer_layout.addWidget(self.send_button)
+        layout.addWidget(composer)
+
         return panel
-
-    def _build_settings_panel(self) -> QWidget:
-        panel = QWidget()
-        panel.setObjectName("SettingsPanel")
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(14)
-
-        title = QLabel("设置")
-        title.setObjectName("Title")
-        layout.addWidget(title)
-
-        subtitle = QLabel("配置模型名称、Base URL 和 API Key；保存后下一次发送会使用当前配置。")
-        subtitle.setObjectName("Subtitle")
-        layout.addWidget(subtitle)
-
-        form = QFrame()
-        form.setObjectName("SettingsCard")
-        form_layout = QVBoxLayout(form)
-        form_layout.setContentsMargins(18, 18, 18, 18)
-        form_layout.setSpacing(12)
-
-        self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self.api_key_input.setPlaceholderText("sk-...")
-        self.model_input.setPlaceholderText("例如 deepseek-v4-pro / gpt-4.1-mini")
-        self.base_url_input.setPlaceholderText("https://.../v1")
-
-        form_layout.addWidget(self._field("切换模型", self.model_switch_combo))
-        form_layout.addWidget(self._field("模型名称", self.model_input))
-        form_layout.addWidget(self._field("Base URL", self.base_url_input))
-        form_layout.addWidget(self._field("API Key", self.api_key_input))
-        form_layout.addWidget(self.save_settings_button)
-        self.settings_status.setObjectName("SettingsStatus")
-        form_layout.addWidget(self.settings_status)
-        layout.addWidget(form)
-
-        mcp_form = QFrame()
-        mcp_form.setObjectName("SettingsCard")
-        mcp_layout = QVBoxLayout(mcp_form)
-        mcp_layout.setContentsMargins(18, 18, 18, 18)
-        mcp_layout.setSpacing(12)
-
-        mcp_title = QLabel("导入外部 MCP 服务")
-        mcp_title.setObjectName("PanelTitle")
-        mcp_layout.addWidget(mcp_title)
-        self.mcp_name_input.setPlaceholderText("例如 filesystem")
-        self.mcp_endpoint_input.setPlaceholderText("启动命令或 URL")
-        mcp_layout.addWidget(self._field("服务名称", self.mcp_name_input))
-        mcp_layout.addWidget(self._field("启动命令 / URL", self.mcp_endpoint_input))
-        mcp_layout.addWidget(self.import_mcp_button)
-        self.mcp_status.setObjectName("SettingsStatus")
-        mcp_layout.addWidget(self.mcp_status)
-        self.mcp_services_list.setObjectName("McpServicesList")
-        self.mcp_services_list.setFixedHeight(96)
-        mcp_layout.addWidget(self.mcp_services_list)
-        layout.addWidget(mcp_form)
-        layout.addStretch()
-        return panel
-
-    def _field(self, label_text: str, widget: QWidget) -> QWidget:
-        field = QWidget()
-        layout = QVBoxLayout(field)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(5)
-        label = QLabel(label_text)
-        label.setObjectName("FieldLabel")
-        layout.addWidget(label)
-        layout.addWidget(widget)
-        return field
 
     def _build_inspector(self) -> QWidget:
         inspector = QFrame()
@@ -304,173 +442,74 @@ class MainWindow(QMainWindow):
         inspector.setFixedWidth(340)
         layout = QVBoxLayout(inspector)
         layout.setContentsMargins(18, 20, 18, 20)
-        layout.setSpacing(12)
+        layout.setSpacing(14)
 
-        layout.addWidget(self._section_label("执行阶段"))
-        self.steps_list.setObjectName("StepsList")
-        layout.addWidget(self.steps_list, stretch=1)
+        layout.addWidget(self._section_title("执行阶段"))
+        self.execution_list.setObjectName("StageList")
+        self.execution_list.setMinimumHeight(170)
+        layout.addWidget(self.execution_list)
 
-        layout.addWidget(self._section_label("计划列表"))
+        layout.addWidget(self._section_title("计划列表"))
         self.plan_list.setObjectName("PlanList")
-        layout.addWidget(self.plan_list, stretch=1)
+        self.plan_list.setMinimumHeight(180)
+        layout.addWidget(self.plan_list)
 
-        layout.addWidget(self._section_label("可调用工具"))
-        self.tools_list.setObjectName("ToolsList")
-        layout.addWidget(self.tools_list, stretch=1)
-
-        layout.addWidget(self._section_label("当前意图"))
+        layout.addWidget(self._section_title("当前意图"))
         self.intent_value.setObjectName("IntentValue")
+        self.intent_value.setWordWrap(True)
         layout.addWidget(self.intent_value)
+
+        footer = QFrame()
+        footer.setObjectName("FooterBar")
+        footer_layout = QHBoxLayout(footer)
+        footer_layout.setContentsMargins(0, 0, 0, 0)
+        footer_layout.setSpacing(10)
+
+        self.memory_button = QPushButton("完整记忆")
+        self.settings_button = QPushButton("设置")
+        self.memory_button.clicked.connect(self._open_memory_dialog)
+        self.settings_button.clicked.connect(self._open_settings_dialog)
+        footer_layout.addWidget(self.memory_button)
+        footer_layout.addWidget(self.settings_button)
+        layout.addStretch()
+        layout.addWidget(footer)
         return inspector
 
-    def _section_label(self, text: str) -> QLabel:
+    def _section_title(self, text: str) -> QLabel:
         label = QLabel(text)
-        label.setObjectName("SectionTitle")
+        label.setObjectName("PanelTitle")
         return label
 
     def _connect_events(self) -> None:
         self.send_button.clicked.connect(self._send_message)
         self.input_box.returnPressed.connect(self._send_message)
-        self.new_session_button.clicked.connect(self._start_new_conversation)
-        self.workbench_button.clicked.connect(self._show_workbench)
-        self.complete_memory_button.clicked.connect(self._show_complete_memory_dialog)
-        self.settings_button.clicked.connect(self._show_settings)
-        self.model_switch_combo.currentTextChanged.connect(self._switch_model_profile)
-        self.save_settings_button.clicked.connect(self._save_model_settings)
-        self.import_mcp_button.clicked.connect(self._save_mcp_service)
+        self.tool_buttons["内置工具"].clicked.connect(self._select_builtin_tools)
+        self.tool_buttons["MCP 调用"].clicked.connect(self._select_mcp_tools)
 
-    def _show_workbench(self) -> None:
-        current_size = self.size()
-        self.workbench_panel.show()
-        self.settings_panel.hide()
-        self.workbench_button.setProperty("active", True)
-        self.settings_button.setProperty("active", False)
-        self._refresh_button_styles()
-        if self.isVisible():
-            self.resize(current_size)
+    def _handle_nav_click(self, name: str) -> None:
+        for button_name, button in self.nav_buttons.items():
+            button.setChecked(button_name == name)
+        if name == "记忆":
+            self._open_memory_dialog()
+        elif name == "设置":
+            self._open_settings_dialog()
 
-    def _show_settings(self) -> None:
-        current_size = self.size()
-        self.workbench_panel.hide()
-        self.settings_panel.show()
-        self.workbench_button.setProperty("active", False)
-        self.settings_button.setProperty("active", True)
-        self._refresh_button_styles()
-        if self.isVisible():
-            self.resize(current_size)
+    def _select_builtin_tools(self) -> None:
+        self.status_value.setText("builtin tools")
+        self.intent_value.setText("内置工具入口已就绪")
 
-    def _refresh_button_styles(self) -> None:
-        for button in (self.workbench_button, self.complete_memory_button, self.settings_button):
-            button.style().unpolish(button)
-            button.style().polish(button)
-
-    def _load_model_settings(self) -> None:
-        settings = load_settings()
-        self._refresh_model_switch(settings.model_name)
-        self.model_input.setText(settings.model_name)
-        self.base_url_input.setText(settings.base_url)
-        self.api_key_input.setText(settings.api_key)
-
-    def _refresh_model_switch(self, active_model: str) -> None:
-        self.model_switch_combo.blockSignals(True)
-        self.model_switch_combo.clear()
-        for profile in list_model_settings():
-            self.model_switch_combo.addItem(profile.model_name)
-        if active_model and self.model_switch_combo.findText(active_model) < 0:
-            self.model_switch_combo.addItem(active_model)
-        if active_model:
-            self.model_switch_combo.setCurrentText(active_model)
-        self.model_switch_combo.blockSignals(False)
-
-    def _switch_model_profile(self, model_name: str) -> None:
-        if not model_name:
-            return
-        try:
-            settings = switch_active_model(model_name)
-        except ValueError:
-            return
-        self.model_input.setText(settings.model_name)
-        self.base_url_input.setText(settings.base_url)
-        self.api_key_input.setText(settings.api_key)
-        self.settings_status.setText(f"已切换到模型：{settings.model_name}")
-
-    def _save_model_settings(self) -> None:
-        settings = ModelSettings(
-            model_name=self.model_input.text().strip(),
-            api_key=self.api_key_input.text().strip(),
-            base_url=self.base_url_input.text().strip(),
-        )
-        save_model_settings(settings)
-        self._refresh_model_switch(settings.model_name)
-        self.settings_status.setText("已保存，下一次发送会使用该模型配置。")
-
-    def _save_mcp_service(self) -> None:
-        settings = McpServiceSettings(
-            name=self.mcp_name_input.text().strip(),
-            endpoint=self.mcp_endpoint_input.text().strip(),
-        )
-        try:
-            save_mcp_service_settings(settings)
-        except ValueError as exc:
-            self.mcp_status.setText(str(exc))
-            return
-        self.mcp_status.setText(f"已导入 MCP：{settings.name}")
-        self.mcp_name_input.clear()
-        self.mcp_endpoint_input.clear()
-        self._refresh_mcp_services()
-        self._refresh_tools()
+    def _select_mcp_tools(self) -> None:
+        self.status_value.setText("mcp tools")
+        self.intent_value.setText("MCP 调用入口已就绪")
 
     def _send_message(self) -> None:
-        clean_message = self.view_model.begin_message(self.input_box.text())
-        if clean_message is None:
+        summary = self.view_model.send_message(self.input_box.text())
+        if summary is None:
             return
         self.input_box.clear()
         self._refresh_messages()
-        self._set_composer_enabled(False)
-
-        worker = AgentWorker(clean_message, self.view_model)
-        worker.signals.chunk.connect(self._append_response_chunk)
-        worker.signals.finished.connect(self._finish_message)
-        worker.signals.failed.connect(self._fail_message)
-        self.thread_pool.start(worker)
-
-    def _set_composer_enabled(self, enabled: bool) -> None:
-        self.input_box.setEnabled(enabled)
-        self.send_button.setEnabled(enabled)
-
-    def _append_response_chunk(self, chunk: str) -> None:
-        self.view_model.append_response_chunk(chunk)
-        self._refresh_messages()
-
-    def _finish_message(self, clean_message: str, state: object) -> None:
-        summary = self.view_model.complete_message(clean_message, state)
-        self._refresh_messages()
         self._refresh_inspector(summary)
-        self._set_composer_enabled(True)
-        self.input_box.setFocus()
-
-    def _fail_message(self, clean_message: str, error: str) -> None:
-        summary = self.view_model.complete_message(
-            clean_message,
-            {
-                "response": f"发送失败：{error}",
-                "intent": "chat",
-                "tool_result": None,
-                "memory_context": [],
-            },
-        )
-        self._refresh_messages()
-        self._refresh_inspector(summary)
-        self._set_composer_enabled(True)
-        self.input_box.setFocus()
-
-    def _start_new_conversation(self) -> None:
-        self.view_model.start_new_conversation()
-        self._refresh_messages()
-        self._refresh_inspector(None)
-        self.input_box.clear()
-        self._set_composer_enabled(True)
-        self.input_box.setFocus()
+        self.status_value.setText(summary.intent)
 
     def _refresh_messages(self) -> None:
         self.chat_list.clear()
@@ -479,190 +518,141 @@ class MainWindow(QMainWindow):
         self.chat_list.scrollToBottom()
 
     def _format_message_item(self, message: ChatMessage) -> QListWidgetItem:
-        speaker = "你" if message.role == "user" else "Copy_Myself"
-        text = f"{speaker}: {message.content}"
-        item = QListWidgetItem(text)
+        speaker = "我" if message.role == "user" else "Copy_Myself"
+        item = QListWidgetItem(f"{speaker}: {message.content}")
         item.setTextAlignment(Qt.AlignmentFlag.AlignLeft)
-        item.setSizeHint(QSize(0, self._message_item_height(text)))
         return item
 
-    def _message_item_height(self, text: str) -> int:
-        available_width = max(self.chat_list.viewport().width() - 28, 420)
-        metrics = QFontMetrics(self.chat_list.font())
-        rect = metrics.boundingRect(
-            0,
-            0,
-            available_width,
-            10000,
-            int(Qt.TextFlag.TextWordWrap),
-            text,
-        )
-        return max(44, rect.height() + 24)
-
     def _refresh_inspector(self, summary: RunSummary | None) -> None:
-        self.steps_list.clear()
+        self.execution_list.clear()
         steps = summary.graph_steps if summary else [
             "load_memory",
             "classify_intent",
             "run_tool",
             "create_response",
         ]
-        for step in steps:
-            self.steps_list.addItem(step)
+        for index, step in enumerate(steps, start=1):
+            self.execution_list.addItem(f"{index}. {step}")
 
         self.plan_list.clear()
-        for item in self.view_model.plan_items():
+        for item in self._build_plan_items(summary):
             self.plan_list.addItem(item)
 
-        self.intent_value.setText(summary.intent if summary else "待命")
-        self._refresh_tools()
+        self.intent_value.setText(summary.intent if summary else "standby")
 
-    def _refresh_tools(self) -> None:
-        self.tools_list.clear()
-        for item in self.tool_registry.catalog():
-            self.tools_list.addItem(f"内置 · {item.name} - {item.description}")
-        services = list_mcp_service_settings()
-        if services:
-            for service in services:
-                self.tools_list.addItem(f"MCP · {service.name} - {service.endpoint}")
-        else:
-            self.tools_list.addItem("MCP · 外部服务可接入，当前未连接")
+    def _build_plan_items(self, summary: RunSummary | None) -> list[str]:
+        if summary:
+            return [
+                "1. 识别当前任务",
+                "2. 选择内置工具或 MCP",
+                "3. 汇总结果并生成响应",
+            ]
+        return [
+            "1. 等待输入",
+            "2. 进入执行阶段",
+            "3. 点击完整记忆可查看上下文",
+        ]
 
-    def _refresh_mcp_services(self) -> None:
-        self.mcp_services_list.clear()
-        services = list_mcp_service_settings()
-        if services:
-            for service in services:
-                self.mcp_services_list.addItem(f"{service.name} · {service.endpoint}")
-        else:
-            self.mcp_services_list.addItem("暂无已导入 MCP 服务。")
+    def _open_memory_dialog(self) -> None:
+        if self.memory_dialog is None:
+            self.memory_dialog = MemoryDialog(self.view_model, self)
+        self.memory_dialog.refresh()
+        self.memory_dialog.show()
+        self.memory_dialog.raise_()
+        self.memory_dialog.activateWindow()
 
-    def _show_complete_memory_dialog(self) -> None:
-        dialog = self._build_complete_memory_dialog()
-        dialog.exec()
-
-    def _build_complete_memory_dialog(self) -> QDialog:
-        dialog = QDialog(self)
-        dialog.setWindowTitle("完整记忆")
-        dialog.resize(620, 520)
-        layout = QVBoxLayout(dialog)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(10)
-
-        title = QLabel("完整记忆")
-        title.setObjectName("Title")
-        layout.addWidget(title)
-
-        memory_list = QListWidget()
-        memory_list.setObjectName("CompleteMemoryList")
-        items = self.view_model.complete_memory_items()
-        if items:
-            memory_list.addItems(items)
-        else:
-            memory_list.addItem("暂无完整记忆。")
-        dialog.memory_list = memory_list
-        layout.addWidget(memory_list, stretch=1)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        buttons.rejected.connect(dialog.reject)
-        layout.addWidget(buttons)
-        dialog.setStyleSheet(STYLESHEET)
-        return dialog
-
-    def closeEvent(self, event) -> None:
-        self.view_model.flush_memory()
-        super().closeEvent(event)
+    def _open_settings_dialog(self) -> None:
+        if self.settings_dialog is None:
+            self.settings_dialog = SettingsDialog(self)
+        self.settings_dialog.refresh()
+        self.settings_dialog.show()
+        self.settings_dialog.raise_()
+        self.settings_dialog.activateWindow()
 
 
 STYLESHEET = """
-QMainWindow, #Root {
-    background: #020817;
+QMainWindow {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #031022, stop:0.45 #071b3a, stop:1 #04131f);
 }
-#Sidebar, #Inspector {
-    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-        stop: 0 #061b3a, stop: 0.52 #031226, stop: 1 #020817);
-    border: 1px solid #164e8a;
-    color: #e8f7ff;
+QWidget {
+    color: #e5f2ff;
+    font-family: "Segoe UI", "Microsoft YaHei";
+    font-size: 12px;
 }
-#CenterPanel {
-    background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1,
-        stop: 0 #020817, stop: 0.28 #061b3a, stop: 0.68 #082a5a, stop: 1 #020817);
+#Sidebar, #Inspector, #HeaderBand, #StageBand, #Composer, #SettingsSection, #FooterBar {
+    background: rgba(7, 18, 37, 0.74);
+    border: 1px solid rgba(92, 171, 255, 0.18);
+    border-radius: 14px;
+}
+#Sidebar {
+    border-top-left-radius: 0px;
+    border-bottom-left-radius: 0px;
+    border-left: 0px;
+}
+#Inspector {
+    border-top-right-radius: 0px;
+    border-bottom-right-radius: 0px;
+    border-right: 0px;
 }
 #Brand {
-    color: #f8fdff;
-    font-size: 17px;
-    font-weight: 900;
-}
-#BrandLogo {
-    background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1,
-        stop: 0 #020817, stop: 0.55 #0b5cff, stop: 1 #35d7ff);
-    border: 1px solid #8bdcff;
-    border-radius: 8px;
-}
-#BrandLogoImage {
-    border-radius: 7px;
-}
-#SectionTitle, #PanelTitle, #FieldLabel {
-    color: #35d7ff;
-    font-size: 14px;
+    font-size: 18px;
     font-weight: 800;
+    letter-spacing: 0px;
+    color: #dff4ff;
+}
+#SidebarSection, #SectionTitle, #PanelTitle, #DialogTitle {
+    font-size: 13px;
+    font-weight: 700;
+    color: #9fd7ff;
+}
+#Subtitle, #DialogSubtitle, #SectionHint {
+    color: #7f9ec4;
 }
 #Title {
-    color: #f8fdff;
-    font-size: 29px;
-    font-weight: 900;
-}
-#Subtitle, #SettingsStatus {
-    color: #9fc9e8;
-    font-size: 14px;
-}
-#SettingsCard {
-    background: rgba(8, 28, 61, 0.82);
-    border: 1px solid #1d72c9;
-    border-radius: 8px;
-}
-QListWidget, QTextEdit, QLineEdit, QComboBox {
-    background: rgba(3, 18, 38, 0.88);
-    border: 1px solid #1a5f9f;
-    border-radius: 6px;
-    color: #e8f7ff;
-    padding: 8px;
-    selection-background-color: #0b5cff;
-}
-QLineEdit:focus, QComboBox:focus {
-    border: 1px solid #35d7ff;
-}
-#ChatList {
-    border: 1px solid #2387d6;
-}
-QPushButton {
-    background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0,
-        stop: 0 #061b3a, stop: 1 #082a5a);
-    border: 1px solid #1a5f9f;
-    border-radius: 6px;
-    color: #e8f7ff;
+    font-size: 28px;
     font-weight: 800;
-    padding: 10px 12px;
-    text-align: left;
+    color: #f5fbff;
 }
-QPushButton:hover {
-    background: #0a3d7a;
-    border: 1px solid #35d7ff;
+#StatusValue, #IntentValue, #CurrentModelValue {
+    color: #35d7ff;
+    font-size: 16px;
+    font-weight: 700;
 }
-QPushButton[active="true"] {
-    background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0,
-        stop: 0 #0b5cff, stop: 1 #35d7ff);
-    border: 1px solid #8bdcff;
+#ModelSourceValue {
+    color: #7f9ec4;
+}
+#ToolChip, #SidebarButton, QPushButton {
+    background: rgba(16, 54, 99, 0.9);
+    border: 1px solid rgba(95, 190, 255, 0.38);
+    border-radius: 10px;
+    color: #eff9ff;
+    padding: 9px 14px;
+    font-weight: 700;
+}
+#ToolChip:hover, #SidebarButton:hover, QPushButton:hover {
+    background: rgba(24, 77, 137, 0.95);
+    border-color: rgba(124, 210, 255, 0.65);
+}
+#SidebarButton:checked {
+    background: rgba(28, 92, 161, 0.98);
+    border-color: rgba(149, 231, 255, 0.85);
+}
+QListWidget, QLineEdit, QComboBox {
+    background: rgba(3, 13, 28, 0.78);
+    border: 1px solid rgba(95, 190, 255, 0.24);
+    border-radius: 12px;
+    color: #eff9ff;
+    selection-background-color: rgba(53, 215, 255, 0.28);
+    padding: 10px;
+}
+QListWidget::item {
+    padding: 8px 6px;
+}
+QListWidget::item:selected {
+    background: rgba(53, 215, 255, 0.16);
     color: #ffffff;
 }
-QPushButton:disabled {
-    background: #0f2338;
-    border: 1px solid #294764;
-    color: #7896b4;
-}
-#IntentValue {
-    color: #77e8ff;
-    font-size: 18px;
-    font-weight: 900;
+#ChatList {
+    min-height: 320px;
 }
 """

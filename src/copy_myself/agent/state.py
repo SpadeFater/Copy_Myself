@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Literal, TypedDict
 
 
-Intent = Literal["unknown", "chat", "health_check", "tool"]
+Intent = Literal["unknown", "chat", "health_check"]
 
 
 class ButlerState(TypedDict):
@@ -13,7 +13,6 @@ class ButlerState(TypedDict):
     messages: list[dict[str, str]]
     intent: Intent
     tool_name: str | None
-    tool_arguments: dict[str, Any]
     tool_result: dict[str, Any] | None
     memory_context: list[str]
     response: str | None
@@ -26,7 +25,6 @@ def create_initial_state(user_input: str) -> ButlerState:
         "messages": [],
         "intent": "unknown",
         "tool_name": None,
-        "tool_arguments": {},
         "tool_result": None,
         "memory_context": [],
         "response": None,
