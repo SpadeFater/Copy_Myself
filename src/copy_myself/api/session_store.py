@@ -3,13 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from uuid import uuid4
 
-from copy_myself.memory import InMemoryStore
+from copy_myself.agent.graph import create_default_memory_store
+from copy_myself.memory.base import MemoryStore
 
 
 @dataclass
 class WorkbenchSession:
     session_id: str
-    memory: InMemoryStore = field(default_factory=InMemoryStore)
+    memory: MemoryStore = field(default_factory=create_default_memory_store)
 
 
 class SessionStore:

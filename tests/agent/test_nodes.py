@@ -6,16 +6,16 @@ from copy_myself.agent.nodes import (
 )
 from copy_myself.agent.state import create_initial_state
 from copy_myself.memory import InMemoryStore
-from copy_myself.tools import HealthTool, ToolRegistry
+from copy_myself.tools import TimeTool, ToolRegistry
 
 
-def test_classify_intent_detects_health_check() -> None:
+def test_classify_intent_detects_time_lookup() -> None:
     state = create_initial_state("health check")
 
     result = classify_intent(state)
 
-    assert result["intent"] == "health_check"
-    assert result["tool_name"] == "health"
+    assert result["intent"] == "time_lookup"
+    assert result["tool_name"] == "getTime"
 
 
 def test_classify_intent_defaults_to_chat() -> None:
@@ -25,6 +25,16 @@ def test_classify_intent_defaults_to_chat() -> None:
 
     assert result["intent"] == "chat"
     assert result["tool_name"] is None
+
+
+def test_classify_intent_extracts_timezone_for_time_request() -> None:
+    state = create_initial_state("what time is it in Asia/Shanghai?")
+
+    result = classify_intent(state)
+
+    assert result["intent"] == "time_lookup"
+    assert result["tool_name"] == "getTime"
+    assert result["tool_arguments"] == {"timezone": "Asia/Shanghai"}
 
 
 def test_load_memory_context_reads_store() -> None:
@@ -39,13 +49,16 @@ def test_load_memory_context_reads_store() -> None:
 
 def test_run_selected_tool_uses_registry() -> None:
     registry = ToolRegistry()
-    registry.register(HealthTool())
+    registry.register(TimeTool())
     state = create_initial_state("health")
-    state["tool_name"] = "health"
+    state["tool_name"] = "getTime"
+    state["tool_arguments"] = {"timezone": "UTC"}
 
     result = run_selected_tool(state, registry)
 
-    assert result["tool_result"] == {"status": "ok", "source": "agent"}
+    assert result["tool_result"]["status"] == "ok"
+    assert result["tool_result"]["timezone"] == "UTC"
+    assert result["tool_result"]["source"] == "agent"
     assert result["error"] is None
 
 
@@ -56,3 +69,22 @@ def test_create_response_uses_error_fallback() -> None:
     result = create_response(state)
 
     assert "暂时无法完成" in result["response"]
+
+
+def test_create_response_formats_time_result_as_butler_message() -> None:
+    state = create_initial_state("现在几点")
+    state["intent"] = "time_lookup"
+    state["tool_name"] = "getTime"
+    state["tool_result"] = {
+        "status": "ok",
+        "time": "2026-07-25T18:30:00+08:00",
+        "timezone": "Asia/Shanghai",
+    }
+
+    result = create_response(state)
+
+    assert result["response"] == (
+        "好的，我已经帮你查好了。\n\n"
+        "当前时间：2026-07-25 18:30:00\n"
+        "时区：Asia/Shanghai"
+    )

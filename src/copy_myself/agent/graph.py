@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 from langgraph.graph import END, StateGraph
 
 from copy_myself.config import load_settings
@@ -8,18 +11,23 @@ from copy_myself.agent.nodes import (
     create_response,
     load_memory_context,
     run_selected_tool,
+    save_memory_context,
 )
 from copy_myself.agent.state import ButlerState, create_initial_state
-from copy_myself.memory import InMemoryStore
+from copy_myself.memory import GraphMemoryStore
 from copy_myself.memory.base import MemoryStore
 from copy_myself.llm.base import ModelClient
 from copy_myself.llm.openai_compatible import OpenAICompatibleClient
-from copy_myself.tools import HealthTool, ToolRegistry
+from copy_myself.tools import TimeTool, ToolRegistry
+
+
+MEMORY_PATH_ENV = "COPY_MYSELF_MEMORY_PATH"
+DEFAULT_MEMORY_PATH = Path("memory") / "memory_graph.sqlite3"
 
 
 def create_default_registry() -> ToolRegistry:
     registry = ToolRegistry()
-    registry.register(HealthTool())
+    registry.register(TimeTool())
     return registry
 
 
@@ -31,12 +39,23 @@ def build_model_client() -> ModelClient | None:
     return None
 
 
+def default_memory_path() -> Path:
+    override = os.getenv(MEMORY_PATH_ENV)
+    if override:
+        return Path(override).expanduser()
+    return DEFAULT_MEMORY_PATH
+
+
+def create_default_memory_store() -> GraphMemoryStore:
+    return GraphMemoryStore(default_memory_path())
+
+
 def build_graph(
     memory: MemoryStore | None = None,
     registry: ToolRegistry | None = None,
     model_client: ModelClient | None = None,
 ):
-    memory_store = memory or InMemoryStore()
+    memory_store = memory or create_default_memory_store()
     tool_registry = registry or create_default_registry()
     active_model_client = model_client if model_client is not None else build_model_client()
 
@@ -48,12 +67,14 @@ def build_graph(
         "create_response",
         lambda state: create_response(state, model_client=active_model_client),
     )
+    graph.add_node("save_memory", lambda state: save_memory_context(state, memory_store))
 
     graph.set_entry_point("load_memory")
     graph.add_edge("load_memory", "classify_intent")
     graph.add_edge("classify_intent", "run_tool")
     graph.add_edge("run_tool", "create_response")
-    graph.add_edge("create_response", END)
+    graph.add_edge("create_response", "save_memory")
+    graph.add_edge("save_memory", END)
     return graph.compile()
 
 
@@ -65,10 +86,4 @@ def run_agent(
 ) -> ButlerState:
     graph = build_graph(memory=memory, registry=registry, model_client=model_client)
     state = graph.invoke(create_initial_state(user_input))
-    response = state.get("response")
-    if response:
-        target_memory = memory
-        if target_memory is not None:
-            target_memory.save("user", user_input)
-            target_memory.save("assistant", response)
     return state

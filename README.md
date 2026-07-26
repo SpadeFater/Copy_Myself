@@ -5,7 +5,7 @@ Copy_Myself is a LangGraph-based personal butler agent project. The current stag
 ## Current Status
 
 - Goal confirmed: build a personal butler agent based on LangGraph.
-- Framework status: standard foundation scaffold.
+- Framework status: standard foundation scaffold with local SQLite graph memory.
 - Feature status: concrete butler abilities are intentionally left behind interfaces.
 
 ## Install
@@ -55,6 +55,22 @@ copy-myself-gui
 The PyQt workbench calls the LangGraph agent directly and does not require the
 FastAPI server to be running.
 
+## Memory
+
+Copy_Myself uses a local-first SQLite graph memory store by default. Each
+completed user-assistant exchange is saved as one durable `MemoryNode`; related
+nodes are linked by `MemoryEdge` records. The default database is:
+
+```text
+memory/memory_graph.sqlite3
+```
+
+Override it for tests or alternate profiles with:
+
+```powershell
+$env:COPY_MYSELF_MEMORY_PATH="D:\path\to\memory.sqlite3"
+```
+
 ## Test
 
 ```powershell
@@ -69,8 +85,8 @@ src/copy_myself/
   agent/      LangGraph state, nodes, and graph assembly
   api/        FastAPI integration routes
   gui/        PyQt desktop workbench
-  memory/     Memory protocol and in-memory implementation
-  tools/      Tool protocol, registry, and sample health tool
+  memory/     SQLite graph memory, extraction, models, and test double
+  tools/      Tool protocol, registry, and built-in time tool
   cli.py      Local command-line entry point
   config.py   Environment-driven settings
   logging.py  Logging setup
@@ -84,7 +100,7 @@ tests/
 ## Next Milestones
 
 1. Decide the first concrete personal-butler capability.
-2. Add a real LLM adapter behind the existing node boundary.
-3. Replace in-memory storage with persistent memory.
+2. Add richer memory management UX such as archive/delete controls.
+3. Add a real LLM adapter behind the existing node boundary.
 4. Add richer tool modules for tasks, reminders, notes, or schedules.
 5. Add richer PyQt execution traces to the desktop workbench.
