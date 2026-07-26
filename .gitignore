@@ -16,9 +16,17 @@ dist/
 .env
 .env.*
 !.env.example
+keys
 .venv/
 venv/
 env/
+
+# Local runtime data
+memory/
+src/copy_myself/gui/memory/
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
 
 # IDE and OS state
 .idea/

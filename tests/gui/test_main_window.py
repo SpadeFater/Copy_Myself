@@ -4,13 +4,20 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtWidgets import QApplication, QLabel, QTextEdit
+import pytest
+from PyQt6.QtWidgets import QApplication, QLabel, QPlainTextEdit, QTextEdit
 
 from copy_myself.config import list_mcp_service_settings, list_model_provider_settings
-from copy_myself.gui.main_window import MainWindow
-from copy_myself.gui.view_model import WorkbenchViewModel
+from copy_myself.gui import main_window as gui_main_window
+from copy_myself.gui.main_window import MESSAGE_BODY_MAX_HEIGHT, MainWindow
+from copy_myself.gui.view_model import ChatMessage, RunSummary, WorkbenchViewModel
 
 _APP: QApplication | None = None
+
+
+@pytest.fixture(autouse=True)
+def _isolated_memory_path(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("COPY_MYSELF_MEMORY_PATH", str(tmp_path / "memory.sqlite3"))
 
 
 def _app() -> QApplication:
@@ -57,7 +64,211 @@ def test_toolbar_and_inspector_keep_tool_entry_without_tool_result() -> None:
     window.close()
 
 
-def test_memory_button_opens_memory_dialog_and_settings_button_opens_settings_dialog() -> None:
+def test_chat_message_widget_wraps_long_text() -> None:
+    _app()
+    view_model = WorkbenchViewModel(
+        messages=[
+            ChatMessage(
+                role="assistant",
+                content="这是一段很长的管家回复，用来确认聊天区域会自动换行而不是把内容推出窗口边界。",
+            )
+        ]
+    )
+    window = MainWindow(view_model)
+
+    item = window.chat_list.item(0)
+    widget = window.chat_list.itemWidget(item)
+
+    assert widget is not None
+    assert widget.message_body.lineWrapMode() == widget.message_body.LineWrapMode.WidgetWidth
+    assert item.sizeHint().height() > 30
+    assert widget.message_body.height() < MESSAGE_BODY_MAX_HEIGHT
+    window.close()
+
+
+def test_chat_message_widget_caps_large_response_and_scrolls_inside_bubble() -> None:
+    _app()
+    view_model = WorkbenchViewModel(
+        messages=[
+            ChatMessage(
+                role="assistant",
+                content="\n".join(["long assistant response line"] * 80),
+            )
+        ]
+    )
+    window = MainWindow(view_model)
+
+    item = window.chat_list.item(0)
+    widget = window.chat_list.itemWidget(item)
+
+    assert widget is not None
+    assert widget.message_body.height() == MESSAGE_BODY_MAX_HEIGHT
+    assert widget.message_body.verticalScrollBar().maximum() > 0
+    assert item.sizeHint().height() <= MESSAGE_BODY_MAX_HEIGHT + 32
+    window.close()
+
+
+def test_chat_message_widget_keeps_short_response_compact_without_scrollbar() -> None:
+    _app()
+    view_model = WorkbenchViewModel(
+        messages=[
+            ChatMessage(
+                role="assistant",
+                content="short response",
+            )
+        ]
+    )
+    window = MainWindow(view_model)
+
+    item = window.chat_list.item(0)
+    widget = window.chat_list.itemWidget(item)
+
+    assert widget is not None
+    assert widget.height() < 120
+    assert widget.message_body.verticalScrollBar().maximum() == 0
+    window.close()
+
+
+def test_chat_message_widget_grows_until_max_height() -> None:
+    _app()
+    content = "\n".join(["medium response line"] * 12)
+    window = MainWindow(
+        WorkbenchViewModel(
+            messages=[ChatMessage(role="assistant", content=content)]
+        )
+    )
+
+    widget = window.chat_list.itemWidget(window.chat_list.item(0))
+
+    assert widget is not None
+    text_height = widget.message_body.fontMetrics().lineSpacing() * 12
+    assert widget.message_body.height() == text_height + 8
+    assert widget.message_body.height() < MESSAGE_BODY_MAX_HEIGHT
+    window.close()
+
+
+def test_chat_message_body_uses_dark_integrated_style() -> None:
+    _app()
+    window = MainWindow(
+        WorkbenchViewModel(
+            messages=[ChatMessage(role="assistant", content="short response")]
+        )
+    )
+
+    widget = window.chat_list.itemWidget(window.chat_list.item(0))
+
+    assert widget is not None
+    assert isinstance(widget.message_body, QPlainTextEdit)
+    assert "background: transparent" in widget.message_body.styleSheet()
+    assert "background: transparent" in widget.message_body.viewport().styleSheet()
+    window.close()
+
+
+def test_response_stream_reveals_text_before_finalizing() -> None:
+    _app()
+    view_model = WorkbenchViewModel()
+    window = MainWindow(view_model)
+    view_model.messages.append(ChatMessage(role="assistant", content=""))
+
+    window._start_response_stream("第一段\n第二段")
+
+    assert view_model.messages[-1].content == ""
+    window._advance_response_stream()
+    assert view_model.messages[-1].content == "第一"
+    window._finish_response_stream()
+    assert view_model.messages[-1].content == "第一段\n第二段"
+    window.close()
+
+
+def test_response_stream_keeps_latest_long_text_scrolled_to_bottom() -> None:
+    _app()
+    view_model = WorkbenchViewModel()
+    window = MainWindow(view_model)
+    view_model.messages.append(ChatMessage(role="assistant", content=""))
+    window._start_response_stream("\n".join(["streaming response line"] * 80))
+
+    while window._stream_timer.isActive():
+        window._advance_response_stream()
+
+    widget = window.chat_list.itemWidget(window.chat_list.item(window.chat_list.count() - 1))
+    scroll_bar = widget.message_body.verticalScrollBar()
+
+    assert scroll_bar.maximum() > 0
+    assert scroll_bar.value() == scroll_bar.maximum()
+    window.close()
+
+
+def test_send_message_shows_thinking_before_agent_run(monkeypatch) -> None:
+    _app()
+    view_model = WorkbenchViewModel()
+    window = MainWindow(view_model)
+    calls = []
+    scheduled = []
+
+    def fake_send_message(message: str) -> RunSummary:
+        calls.append(message)
+        return RunSummary(
+            message=message,
+            response="done",
+            intent="chat",
+            display_intent="对话",
+            stage_label="对话",
+            tool_result=None,
+            memory_context=[],
+            graph_steps=["load_memory", "classify_intent", "run_tool", "create_response", "save_memory"],
+        )
+
+    monkeypatch.setattr(view_model, "send_message", fake_send_message)
+    monkeypatch.setattr(
+        gui_main_window.QTimer,
+        "singleShot",
+        lambda delay_ms, callback: scheduled.append((delay_ms, callback)),
+    )
+    window.input_box.setText("slow question")
+
+    window._send_message()
+
+    assert calls == []
+    assert view_model.messages[-2:] == [
+        ChatMessage(role="user", content="slow question"),
+        ChatMessage(role="assistant", content="管家正在思考问题..."),
+    ]
+    assert scheduled
+    assert scheduled[0][0] >= 30
+
+    scheduled[0][1]()
+
+    assert calls == ["slow question"]
+    assert view_model.messages[-1].content == ""
+    window.close()
+
+
+def test_time_tool_status_uses_time_labels() -> None:
+    _app()
+    window = MainWindow()
+
+    window.input_box.setText("现在几点了")
+    window._send_message()
+    window._complete_pending_message()
+
+    assert window.status_value.text() == "时间查询 · getTime"
+    assert window.intent_value.text() == "时间查询 · getTime"
+    assert "health_check" not in window.status_value.text()
+    assert "health_check" not in window.intent_value.text()
+    window.close()
+
+
+def test_inspector_omits_footer_memory_and_settings_buttons() -> None:
+    _app()
+    window = MainWindow()
+
+    assert not hasattr(window, "memory_button")
+    assert not hasattr(window, "settings_button")
+    assert window.findChild(QLabel, "FooterBar") is None
+    window.close()
+
+
+def test_nav_buttons_open_memory_dialog_and_settings_dialog() -> None:
     app = _app()
     view_model = WorkbenchViewModel()
     view_model.send_message("health check")
@@ -67,9 +278,13 @@ def test_memory_button_opens_memory_dialog_and_settings_button_opens_settings_di
     app.processEvents()
     assert window.memory_dialog is not None
     assert window.memory_dialog.isVisible()
-    assert window.memory_dialog.context_list.count() > 0
+    context_items = [
+        window.memory_dialog.context_list.item(index).text()
+        for index in range(window.memory_dialog.context_list.count())
+    ]
+    assert any("health check" in item for item in context_items)
 
-    window.settings_button.click()
+    window.nav_buttons["设置"].click()
     app.processEvents()
     assert window.settings_dialog is not None
     assert window.settings_dialog.isVisible()
