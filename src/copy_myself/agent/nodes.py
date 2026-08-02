@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime
 
@@ -25,6 +26,33 @@ def _extract_time_arguments(text: str) -> dict[str, str]:
     return {}
 
 
+def _extract_filesystem_arguments(text: str) -> dict[str, str] | None:
+    lowered = text.casefold()
+    list_markers = (
+        "list files",
+        "show files",
+        "list directory",
+        "show directory",
+        "directory listing",
+        "project structure",
+        "workspace structure",
+        "列出文件",
+        "查看文件",
+        "查看目录",
+        "项目结构",
+        "工作区结构",
+        "有哪些文件",
+    )
+    if not any(marker in lowered for marker in list_markers):
+        return None
+
+    path = "."
+    path_match = re.search(r"\b(?:in|under|inside)\s+([^\s]+)", text, re.IGNORECASE)
+    if path_match:
+        path = path_match.group(1).strip("\"'`")
+    return {"action": "list", "path": path or "."}
+
+
 def classify_intent(state: ButlerState) -> ButlerState:
     text = state["user_input"].strip()
     lowered = text.casefold()
@@ -40,10 +68,14 @@ def classify_intent(state: ButlerState) -> ButlerState:
             "现在时间",
         )
     )
-    if lowered in {"health", "health check"} or "健康检查" in lowered or is_time_request:
+    if is_time_request:
         state["intent"] = "time_lookup"
         state["tool_name"] = "getTime"
         state["tool_arguments"] = _extract_time_arguments(text)
+    elif filesystem_arguments := _extract_filesystem_arguments(text):
+        state["intent"] = "chat"
+        state["tool_name"] = "filesystem"
+        state["tool_arguments"] = filesystem_arguments
     else:
         state["intent"] = "chat"
         state["tool_name"] = None
@@ -111,6 +143,22 @@ def _build_model_messages(state: ButlerState) -> list[ChatMessage]:
     return messages
 
 
+def _build_tool_result_messages(state: ButlerState) -> list[ChatMessage]:
+    messages = _build_model_messages(state)
+    tool_payload = json.dumps(state.get("tool_result") or {}, ensure_ascii=False, default=str)
+    messages.append(
+        {
+            "role": "system",
+            "content": (
+                f"Tool result from {state.get('tool_name')}:\n{tool_payload}\n\n"
+                "Use this tool result to answer the user's original request. "
+                "Do not expose raw tool JSON unless the user asks for raw data."
+            ),
+        }
+    )
+    return messages
+
+
 def _format_tool_response(state: ButlerState) -> str:
     tool_result = state["tool_result"] or {}
     if state.get("tool_name") == "getTime":
@@ -127,14 +175,41 @@ def _format_tool_response(state: ButlerState) -> str:
     return f"好的，工具调用已经完成。\n\n{tool_result}"
 
 
-def create_response(state: ButlerState, model_client: ModelClient | None = None) -> ButlerState:
+def create_response(
+    state: ButlerState,
+    model_client: ModelClient | None = None,
+    registry: ToolRegistry | None = None,
+) -> ButlerState:
     if state.get("error"):
         state["response"] = f"暂时无法完成这个请求：{state['error']}"
     elif state.get("tool_result"):
         state["response"] = _format_tool_response(state)
     elif state.get("intent") == "chat" and model_client is not None:
         try:
-            state["response"] = model_client.complete(_build_model_messages(state))
+            messages = _build_model_messages(state)
+            if registry is not None and hasattr(model_client, "decide"):
+                decision = model_client.decide(messages, registry.definitions())
+                tool_call = decision.get("tool_call")
+                if tool_call is not None:
+                    state["tool_name"] = tool_call["name"]
+                    state["tool_arguments"] = tool_call.get("arguments", {})
+                    result = registry.run(
+                        state["tool_name"],
+                        {"source": "agent", **state["tool_arguments"]},
+                    )
+                    if result.ok:
+                        state["tool_result"] = result.data
+                        state["error"] = None
+                        state["response"] = model_client.complete(_build_tool_result_messages(state))
+                    else:
+                        state["tool_result"] = None
+                        state["error"] = result.error
+                        state["response"] = f"暂时无法完成这个请求：{result.error}"
+                    return state
+                if decision.get("content"):
+                    state["response"] = decision["content"]
+                    return state
+            state["response"] = model_client.complete(messages)
         except Exception as exc:
             state["error"] = str(exc)
             state["response"] = "模型连接失败，已回退到本地响应。"

@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from math import ceil
-
-from PyQt6.QtCore import QTimer, QSize, Qt
+from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -14,7 +12,6 @@ from PyQt6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
-    QPlainTextEdit,
     QPushButton,
     QSizePolicy,
     QTabWidget,
@@ -31,94 +28,18 @@ from copy_myself.config import (
     load_settings,
 )
 from copy_myself.gui.view_model import ChatMessage, RunSummary, WorkbenchViewModel
+from copy_myself.gui.execution_graph import ExecutionGraphDialog
+from copy_myself.gui.theme import WORKBENCH_QSS, apply_workbench_theme, fluent_icon
+from copy_myself.gui.widgets import (
+    MESSAGE_BODY_MAX_HEIGHT,
+    ChatListWidget,
+    ChatMessageWidget,
+    ExecutionStepWidget,
+)
 
 
 THINKING_MESSAGE = "管家正在思考问题..."
-MESSAGE_BODY_MAX_HEIGHT = 420
 PENDING_RESPONSE_DELAY_MS = 60
-
-
-class ChatMessageWidget(QFrame):
-    def __init__(self, message: ChatMessage, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setObjectName("UserMessage" if message.role == "user" else "AssistantMessage")
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-
-        self.message_body = QPlainTextEdit()
-        self.message_body.setObjectName("MessageText")
-        self.message_body.setPlainText(message.content)
-        self.message_body.setReadOnly(True)
-        self.message_body.setFrameShape(QFrame.Shape.NoFrame)
-        self.message_body.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
-        self.message_body.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.message_body.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.message_body.document().setDocumentMargin(0)
-        self.message_body.setStyleSheet(
-            "QPlainTextEdit { background: transparent; border: none; color: #eff9ff; }"
-        )
-        self.message_body.viewport().setStyleSheet("background: transparent;")
-        self.message_body.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Preferred,
-        )
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 10, 14, 10)
-        layout.addWidget(self.message_body)
-
-    def fit_to_width(self, width: int) -> None:
-        self.setFixedWidth(width)
-        inner_width = max(1, width - 28)
-        body_width = max(1, inner_width)
-        self.message_body.setFixedWidth(body_width)
-        self.message_body.document().setTextWidth(body_width)
-        text_height = self._text_height_for_width(body_width)
-        body_height = min(
-            MESSAGE_BODY_MAX_HEIGHT,
-            max(self.message_body.fontMetrics().lineSpacing() + 8, text_height + 8),
-        )
-        height = max(44, body_height + 20)
-        self.message_body.setFixedHeight(body_height)
-        self.setFixedHeight(height)
-
-    def _text_height_for_width(self, width: int) -> int:
-        metrics = self.message_body.fontMetrics()
-        line_spacing = metrics.lineSpacing()
-        available_width = max(1, width - 8)
-        visual_lines = 0
-        for paragraph in self.message_body.toPlainText().split("\n"):
-            if not paragraph:
-                visual_lines += 1
-                continue
-            visual_lines += max(1, ceil(metrics.horizontalAdvance(paragraph) / available_width))
-        return max(line_spacing, visual_lines * line_spacing)
-
-    def scroll_body_to_bottom(self) -> None:
-        scroll_bar = self.message_body.verticalScrollBar()
-        scroll_bar.setValue(scroll_bar.maximum())
-
-
-class ChatListWidget(QListWidget):
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        self.resize_message_widgets()
-
-    def resize_message_widgets(self) -> None:
-        width = max(1, self.viewport().width() - 8)
-        for index in range(self.count()):
-            item = self.item(index)
-            widget = self.itemWidget(item)
-            if widget is None:
-                continue
-            widget.fit_to_width(width)
-            item.setSizeHint(QSize(width, widget.height() + 8))
-
-    def scroll_last_message_body_to_bottom(self) -> None:
-        if self.count() == 0:
-            return
-        widget = self.itemWidget(self.item(self.count() - 1))
-        if isinstance(widget, ChatMessageWidget):
-            widget.scroll_body_to_bottom()
 
 
 class MemoryDialog(QDialog):
@@ -127,6 +48,9 @@ class MemoryDialog(QDialog):
         self._view_model = view_model
         self.context_list = QListWidget()
         self.message_list = QListWidget()
+        self.setObjectName("MemoryDialog")
+        self.context_list.setObjectName("MemoryContextList")
+        self.message_list.setObjectName("MemoryMessageList")
 
         self.setWindowTitle("完整记忆")
         self.setModal(False)
@@ -159,6 +83,7 @@ class MemoryDialog(QDialog):
         footer = QHBoxLayout()
         footer.addStretch()
         close_button = QPushButton("关闭")
+        close_button.setObjectName("DialogSecondaryButton")
         close_button.clicked.connect(self.close)
         footer.addWidget(close_button)
         root.addLayout(footer)
@@ -204,6 +129,25 @@ class SettingsDialog(QDialog):
         self.import_mcp_button = QPushButton("导入外部 MCP")
         self.mcp_services = QListWidget()
         self.tabs = QTabWidget()
+        self.setObjectName("SettingsDialog")
+        self.tabs.setObjectName("SettingsTabs")
+        self.model_providers.setObjectName("ModelProviderList")
+        self.mcp_services.setObjectName("McpServiceList")
+        for field in (
+            self.model_name_input,
+            self.model_url_input,
+            self.model_id_input,
+            self.model_api_key_input,
+            self.model_provider_input,
+            self.mcp_name_input,
+            self.mcp_url_input,
+            self.mcp_command_input,
+            self.mcp_args_input,
+        ):
+            field.setObjectName("SettingsInput")
+        self.mcp_transport_input.setObjectName("SettingsCombo")
+        self.import_model_button.setObjectName("DialogPrimaryButton")
+        self.import_mcp_button.setObjectName("DialogPrimaryButton")
 
         self.setWindowTitle("设置")
         self.setModal(False)
@@ -299,6 +243,7 @@ class SettingsDialog(QDialog):
         footer = QHBoxLayout()
         footer.addStretch()
         close_button = QPushButton("关闭")
+        close_button.setObjectName("DialogSecondaryButton")
         close_button.clicked.connect(self.close)
         footer.addWidget(close_button)
         root.addLayout(footer)
@@ -420,6 +365,10 @@ class MainWindow(QMainWindow):
         self.plan_list = QListWidget()
         self.intent_value = QLabel("standby")
         self.tool_entry_label = QLabel("可调用工具")
+        self.execution_graph_button = QPushButton("展开流程图")
+        self.execution_graph_button.setObjectName("ExecutionGraphButton")
+        self.execution_graph_button.setIcon(fluent_icon("CODE"))
+        self.execution_graph_dialog: ExecutionGraphDialog | None = None
 
         self._build_ui()
         self._connect_events()
@@ -428,6 +377,7 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self) -> None:
         root = QWidget()
+        root.setObjectName("WorkbenchRoot")
         root_layout = QHBoxLayout(root)
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
@@ -437,27 +387,43 @@ class MainWindow(QMainWindow):
         root_layout.addWidget(self._build_inspector())
 
         self.setCentralWidget(root)
-        self.setStyleSheet(STYLESHEET)
+        apply_workbench_theme(self)
 
     def _build_sidebar(self) -> QWidget:
         sidebar = QFrame()
         sidebar.setObjectName("Sidebar")
-        sidebar.setFixedWidth(230)
+        sidebar.setFixedWidth(208)
         layout = QVBoxLayout(sidebar)
         layout.setContentsMargins(18, 20, 18, 20)
         layout.setSpacing(14)
 
+        brand_row = QHBoxLayout()
+        brand_row.setSpacing(10)
+        brand_mark = QLabel("CM")
+        brand_mark.setObjectName("BrandMark")
+        brand_mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        brand_mark.setFixedSize(32, 32)
+        brand_column = QVBoxLayout()
+        brand_column.setSpacing(0)
         brand = QLabel("Copy_Myself")
         brand.setObjectName("Brand")
-        layout.addWidget(brand)
+        brand_caption = QLabel("PERSONAL AGENT")
+        brand_caption.setObjectName("BrandCaption")
+        brand_column.addWidget(brand)
+        brand_column.addWidget(brand_caption)
+        brand_row.addWidget(brand_mark)
+        brand_row.addLayout(brand_column)
+        layout.addLayout(brand_row)
 
         nav_section = QLabel("导航")
         nav_section.setObjectName("SidebarSection")
         layout.addWidget(nav_section)
 
+        nav_icons = {"工作台": "HOME", "记忆": "HISTORY", "设置": "SETTING"}
         for text in ("工作台", "记忆", "设置"):
             button = QPushButton(text)
             button.setObjectName("SidebarButton")
+            button.setIcon(fluent_icon(nav_icons[text]))
             button.setCheckable(True)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             button.clicked.connect(lambda checked=False, name=text: self._handle_nav_click(name))
@@ -470,6 +436,7 @@ class MainWindow(QMainWindow):
 
     def _build_center_panel(self) -> QWidget:
         panel = QWidget()
+        panel.setObjectName("CenterPanel")
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(24, 22, 24, 22)
         layout.setSpacing(16)
@@ -483,7 +450,7 @@ class MainWindow(QMainWindow):
         title_row = QHBoxLayout()
         title = QLabel("工作台")
         title.setObjectName("Title")
-        subtitle = QLabel("科幻蓝执行面板")
+        subtitle = QLabel("本地智能工作台")
         subtitle.setObjectName("Subtitle")
         title_row.addWidget(title)
         title_row.addStretch()
@@ -495,10 +462,12 @@ class MainWindow(QMainWindow):
         self.tool_entry_label.setObjectName("PanelTitle")
         action_row.addWidget(self.tool_entry_label)
 
+        tool_icons = {"内置工具": "DEVELOPER_TOOLS", "MCP 调用": "ROBOT"}
         for text in ("内置工具", "MCP 调用"):
             button = QToolButton()
             button.setText(text)
             button.setObjectName("ToolChip")
+            button.setIcon(fluent_icon(tool_icons[text]))
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             action_row.addWidget(button)
             self.tool_buttons[text] = button
@@ -534,6 +503,9 @@ class MainWindow(QMainWindow):
         composer_layout.setContentsMargins(16, 16, 16, 16)
         composer_layout.setSpacing(10)
         self.input_box.setPlaceholderText("告诉 Copy_Myself 你想处理什么...")
+        self.input_box.setObjectName("ComposerInput")
+        self.send_button.setObjectName("PrimaryButton")
+        self.send_button.setIcon(fluent_icon("SEND"))
         composer_layout.addWidget(self.input_box, stretch=1)
         composer_layout.addWidget(self.send_button)
         layout.addWidget(composer)
@@ -543,12 +515,16 @@ class MainWindow(QMainWindow):
     def _build_inspector(self) -> QWidget:
         inspector = QFrame()
         inspector.setObjectName("Inspector")
-        inspector.setFixedWidth(340)
+        inspector.setFixedWidth(320)
         layout = QVBoxLayout(inspector)
         layout.setContentsMargins(18, 20, 18, 20)
         layout.setSpacing(14)
 
-        layout.addWidget(self._section_title("执行阶段"))
+        execution_header = QHBoxLayout()
+        execution_header.addWidget(self._section_title("执行阶段"))
+        execution_header.addStretch()
+        execution_header.addWidget(self.execution_graph_button)
+        layout.addLayout(execution_header)
         self.execution_list.setObjectName("StageList")
         self.execution_list.setMinimumHeight(170)
         layout.addWidget(self.execution_list)
@@ -576,6 +552,7 @@ class MainWindow(QMainWindow):
         self.input_box.returnPressed.connect(self._send_message)
         self.tool_buttons["内置工具"].clicked.connect(self._select_builtin_tools)
         self.tool_buttons["MCP 调用"].clicked.connect(self._select_mcp_tools)
+        self.execution_graph_button.clicked.connect(self._open_execution_graph_dialog)
 
     def _handle_nav_click(self, name: str) -> None:
         for button_name, button in self.nav_buttons.items():
@@ -697,7 +674,11 @@ class MainWindow(QMainWindow):
             "create_response",
         ]
         for index, step in enumerate(steps, start=1):
-            self.execution_list.addItem(f"{index}. {step}")
+            item = QListWidgetItem()
+            widget = ExecutionStepWidget(index, step, active=summary is not None and index == len(steps))
+            self.execution_list.addItem(item)
+            self.execution_list.setItemWidget(item, widget)
+            item.setSizeHint(widget.sizeHint())
 
         self.plan_list.clear()
         for item in self._build_plan_items(summary):
@@ -734,104 +715,24 @@ class MainWindow(QMainWindow):
         self.settings_dialog.raise_()
         self.settings_dialog.activateWindow()
 
+    def _open_execution_graph_dialog(self) -> None:
+        steps = (
+            self.view_model.latest_run.graph_steps
+            if self.view_model.latest_run is not None
+            else [
+                "load_memory",
+                "classify_intent",
+                "run_tool",
+                "create_response",
+            ]
+        )
+        if self.execution_graph_dialog is None:
+            self.execution_graph_dialog = ExecutionGraphDialog(steps, self)
+        else:
+            self.execution_graph_dialog.refresh_steps(steps)
+        self.execution_graph_dialog.show()
+        self.execution_graph_dialog.raise_()
+        self.execution_graph_dialog.activateWindow()
 
-STYLESHEET = """
-QMainWindow {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #031022, stop:0.45 #071b3a, stop:1 #04131f);
-}
-QWidget {
-    color: #e5f2ff;
-    font-family: "Segoe UI", "Microsoft YaHei";
-    font-size: 12px;
-}
-#Sidebar, #Inspector, #HeaderBand, #StageBand, #Composer, #SettingsSection, #FooterBar {
-    background: rgba(7, 18, 37, 0.74);
-    border: 1px solid rgba(92, 171, 255, 0.18);
-    border-radius: 14px;
-}
-#Sidebar {
-    border-top-left-radius: 0px;
-    border-bottom-left-radius: 0px;
-    border-left: 0px;
-}
-#Inspector {
-    border-top-right-radius: 0px;
-    border-bottom-right-radius: 0px;
-    border-right: 0px;
-}
-#Brand {
-    font-size: 18px;
-    font-weight: 800;
-    letter-spacing: 0px;
-    color: #dff4ff;
-}
-#SidebarSection, #SectionTitle, #PanelTitle, #DialogTitle {
-    font-size: 13px;
-    font-weight: 700;
-    color: #9fd7ff;
-}
-#Subtitle, #DialogSubtitle, #SectionHint {
-    color: #7f9ec4;
-}
-#Title {
-    font-size: 28px;
-    font-weight: 800;
-    color: #f5fbff;
-}
-#StatusValue, #IntentValue, #CurrentModelValue {
-    color: #35d7ff;
-    font-size: 16px;
-    font-weight: 700;
-}
-#ModelSourceValue {
-    color: #7f9ec4;
-}
-#ToolChip, #SidebarButton, QPushButton {
-    background: rgba(16, 54, 99, 0.9);
-    border: 1px solid rgba(95, 190, 255, 0.38);
-    border-radius: 10px;
-    color: #eff9ff;
-    padding: 9px 14px;
-    font-weight: 700;
-}
-#ToolChip:hover, #SidebarButton:hover, QPushButton:hover {
-    background: rgba(24, 77, 137, 0.95);
-    border-color: rgba(124, 210, 255, 0.65);
-}
-#SidebarButton:checked {
-    background: rgba(28, 92, 161, 0.98);
-    border-color: rgba(149, 231, 255, 0.85);
-}
-QListWidget, QLineEdit, QComboBox {
-    background: rgba(3, 13, 28, 0.78);
-    border: 1px solid rgba(95, 190, 255, 0.24);
-    border-radius: 12px;
-    color: #eff9ff;
-    selection-background-color: rgba(53, 215, 255, 0.28);
-    padding: 10px;
-}
-QListWidget::item {
-    padding: 4px 0px;
-}
-QListWidget::item:selected {
-    background: rgba(53, 215, 255, 0.16);
-    color: #ffffff;
-}
-#ChatList {
-    min-height: 320px;
-}
-#UserMessage, #AssistantMessage {
-    border-radius: 10px;
-}
-#UserMessage {
-    background: rgba(24, 77, 137, 0.8);
-    border: 1px solid rgba(124, 210, 255, 0.35);
-}
-#AssistantMessage {
-    background: rgba(7, 28, 54, 0.92);
-    border: 1px solid rgba(95, 190, 255, 0.22);
-}
-#MessageText {
-    color: #eff9ff;
-}
-"""
+
+STYLESHEET = WORKBENCH_QSS

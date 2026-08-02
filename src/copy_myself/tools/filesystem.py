@@ -3,8 +3,10 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+import zipfile
 from pathlib import Path
 from typing import Any
+from xml.etree import ElementTree
 
 from copy_myself.tools.base import ToolResult
 
@@ -15,7 +17,35 @@ SENSITIVE_NAMES = {".env", "keys", "id_rsa", "id_ed25519"}
 
 class FileSystemTool:
     name = "filesystem"
-    description = "Read-only access to files within allowed roots."
+    description = "Safely reads and writes files within allowed roots."
+    parameters = {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["list", "stat", "read", "search", "write", "mkdir", "patch", "copy", "move", "delete"],
+            },
+            "path": {"type": "string"},
+            "source": {"type": "string"},
+            "destination": {"type": "string"},
+            "content": {"type": "string"},
+            "query": {"type": "string"},
+            "mode": {"type": "string", "enum": ["name", "content"]},
+            "patch": {"type": "string"},
+            "expected_hash": {"type": "string"},
+            "create_parents": {"type": "boolean"},
+            "parents": {"type": "boolean"},
+            "exist_ok": {"type": "boolean"},
+            "overwrite": {"type": "boolean"},
+            "recursive": {"type": "boolean"},
+            "dry_run": {"type": "boolean"},
+            "confirm": {"type": "boolean"},
+            "offset": {"type": "integer", "minimum": 0},
+            "limit": {"type": "integer", "minimum": 0},
+        },
+        "required": ["action"],
+        "additionalProperties": False,
+    }
     _max_read_bytes = 64 * 1024
 
     def __init__(self, allowed_roots: list[Path] | None = None) -> None:
@@ -87,6 +117,22 @@ class FileSystemTool:
             sample = file.read(1024)
         return b"\x00" in sample
 
+    def _extract_docx_text(self, path: Path) -> str:
+        try:
+            with zipfile.ZipFile(path) as archive:
+                document_xml = archive.read("word/document.xml")
+        except (KeyError, zipfile.BadZipFile) as exc:
+            raise ValueError(f"InvalidDocx: {self._relative(path)}") from exc
+
+        root = ElementTree.fromstring(document_xml)
+        namespace = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+        paragraphs: list[str] = []
+        for paragraph in root.iter(f"{namespace}p"):
+            text = "".join(node.text or "" for node in paragraph.iter(f"{namespace}t"))
+            if text.strip():
+                paragraphs.append(text)
+        return "\n".join(paragraphs)
+
     def _is_sensitive(self, path: Path) -> bool:
         if ".git" in path.parts:
             return True
@@ -130,6 +176,22 @@ class FileSystemTool:
     def _read(self, path: Path, arguments: dict[str, Any]) -> ToolResult:
         if not path.is_file():
             raise ValueError(f"InvalidArguments: not a file {path}")
+        if path.suffix.casefold() == ".docx":
+            content = self._extract_docx_text(path)
+            limit = int(arguments.get("limit", self._max_read_bytes))
+            truncated = len(content) > limit
+            if limit >= 0:
+                content = content[:limit]
+            return ToolResult(
+                name=self.name,
+                ok=True,
+                data={
+                    "action": "read",
+                    "content": content,
+                    "sha256": self._sha256(path),
+                    "truncated": truncated,
+                },
+            )
         if self._is_binary(path):
             raise ValueError(f"BinaryFile: {self._relative(path)}")
 

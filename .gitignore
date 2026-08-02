@@ -32,3 +32,4 @@ frontend/dist/
 frontend/build/
 web/dist/
 web/build/
+/tests/

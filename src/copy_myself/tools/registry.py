@@ -23,3 +23,22 @@ class ToolRegistry:
 
     def names(self) -> list[str]:
         return sorted(self._tools)
+
+    def definitions(self) -> list[dict[str, Any]]:
+        definitions: list[dict[str, Any]] = []
+        for tool in self._tools.values():
+            definitions.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parameters": getattr(
+                            tool,
+                            "parameters",
+                            {"type": "object", "properties": {}, "additionalProperties": True},
+                        ),
+                    },
+                }
+            )
+        return definitions
