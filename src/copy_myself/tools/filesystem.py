@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +24,7 @@ class FileSystemTool:
 
     def run(self, arguments: dict[str, Any]) -> ToolResult:
         action = arguments.get("action")
-        if action not in {"list", "stat", "read", "search", "write", "mkdir", "patch"}:
+        if action not in {"list", "stat", "read", "search", "write", "mkdir", "patch", "copy", "move", "delete"}:
             return ToolResult(
                 name=self.name,
                 ok=False,
@@ -32,6 +33,10 @@ class FileSystemTool:
 
         try:
             path = self._resolve(arguments.get("path", "."))
+            if action == "copy":
+                return self._copy(arguments)
+            if action == "move":
+                return self._move(arguments)
             if action == "list":
                 return self._list(path)
             if action == "stat":
@@ -44,6 +49,8 @@ class FileSystemTool:
                 return self._mkdir(path, arguments)
             if action == "patch":
                 return self._patch(path, arguments)
+            if action == "delete":
+                return self._delete(path, arguments)
             return self._read(path, arguments)
         except OSError as exc:
             return ToolResult(name=self.name, ok=False, error=f"FileSystemError: {exc}")
@@ -270,5 +277,87 @@ class FileSystemTool:
                 "before_sha256": before_hash,
                 "after_sha256": self._sha256(path),
                 "changed": [self._relative(path)],
+            },
+        )
+
+    def _resolve_destination(self, raw_path: Any) -> Path:
+        path = self._resolve(raw_path)
+        self._ensure_not_sensitive(path)
+        return path
+
+    def _copy(self, arguments: dict[str, Any]) -> ToolResult:
+        source = self._resolve(arguments.get("source"))
+        destination = self._resolve_destination(arguments.get("destination"))
+        self._ensure_not_sensitive(source)
+        overwrite = bool(arguments.get("overwrite", False))
+        if destination.exists() and not overwrite:
+            raise ValueError(f"AlreadyExists: {self._relative(destination)}")
+        if source.is_dir():
+            shutil.copytree(source, destination, dirs_exist_ok=overwrite)
+        else:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+        return ToolResult(
+            name=self.name,
+            ok=True,
+            data={
+                "action": "copy",
+                "source": self._relative(source),
+                "destination": self._relative(destination),
+            },
+        )
+
+    def _move(self, arguments: dict[str, Any]) -> ToolResult:
+        source = self._resolve(arguments.get("source"))
+        destination = self._resolve_destination(arguments.get("destination"))
+        self._ensure_not_sensitive(source)
+        overwrite = bool(arguments.get("overwrite", False))
+        if destination.exists() and not overwrite:
+            raise ValueError(f"AlreadyExists: {self._relative(destination)}")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(source), str(destination))
+        return ToolResult(
+            name=self.name,
+            ok=True,
+            data={
+                "action": "move",
+                "source": self._relative(source),
+                "destination": self._relative(destination),
+            },
+        )
+
+    def _delete(self, path: Path, arguments: dict[str, Any]) -> ToolResult:
+        self._ensure_not_sensitive(path)
+        recursive = bool(arguments.get("recursive", False))
+        if path.is_dir() and not recursive:
+            raise ValueError(f"RecursiveRequired: {self._relative(path)}")
+
+        dry_run = bool(arguments.get("dry_run", True))
+        if dry_run:
+            return ToolResult(
+                name=self.name,
+                ok=True,
+                data={"action": "delete", "path": self._relative(path), "dry_run": True},
+            )
+
+        if not bool(arguments.get("confirm", False)):
+            raise ValueError(f"ConfirmationRequired: {self._relative(path)}")
+
+        trash_root = self._allowed_roots[0] / ".trash" / "filesystem-tool"
+        trash_root.mkdir(parents=True, exist_ok=True)
+        trash_path = trash_root / path.name
+        counter = 1
+        while trash_path.exists():
+            trash_path = trash_root / f"{path.stem}-{counter}{path.suffix}"
+            counter += 1
+        shutil.move(str(path), str(trash_path))
+        return ToolResult(
+            name=self.name,
+            ok=True,
+            data={
+                "action": "delete",
+                "path": self._relative(path),
+                "dry_run": False,
+                "trash_path": self._relative(trash_path),
             },
         )

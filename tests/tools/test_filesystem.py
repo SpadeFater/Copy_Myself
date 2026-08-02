@@ -189,3 +189,56 @@ def test_patch_rejects_hash_mismatch(tmp_path: Path) -> None:
 
     assert result.ok is False
     assert "HashMismatch" in (result.error or "")
+
+
+def test_copy_file_inside_workspace(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    write_text(root / "a.txt", "alpha")
+
+    result = FileSystemTool([root]).run({"action": "copy", "source": "a.txt", "destination": "b.txt"})
+
+    assert result.ok is True
+    assert (root / "b.txt").read_text(encoding="utf-8") == "alpha"
+
+
+def test_move_file_inside_workspace(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    write_text(root / "a.txt", "alpha")
+
+    result = FileSystemTool([root]).run({"action": "move", "source": "a.txt", "destination": "b.txt"})
+
+    assert result.ok is True
+    assert not (root / "a.txt").exists()
+    assert (root / "b.txt").read_text(encoding="utf-8") == "alpha"
+
+
+def test_delete_dry_run_leaves_file_untouched(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    write_text(root / "a.txt", "alpha")
+
+    result = FileSystemTool([root]).run({"action": "delete", "path": "a.txt"})
+
+    assert result.ok is True
+    assert result.data["dry_run"] is True
+    assert (root / "a.txt").exists()
+
+
+def test_confirmed_delete_moves_file_to_trash(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    write_text(root / "a.txt", "alpha")
+
+    result = FileSystemTool([root]).run({"action": "delete", "path": "a.txt", "confirm": True, "dry_run": False})
+
+    assert result.ok is True
+    assert not (root / "a.txt").exists()
+    assert (root / result.data["trash_path"]).read_text(encoding="utf-8") == "alpha"
+
+
+def test_delete_rejects_sensitive_paths(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    write_text(root / ".env", "TOKEN=x")
+
+    result = FileSystemTool([root]).run({"action": "delete", "path": ".env", "confirm": True, "dry_run": False})
+
+    assert result.ok is False
+    assert "SensitivePath" in (result.error or "")
