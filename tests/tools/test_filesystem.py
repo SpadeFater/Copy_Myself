@@ -56,3 +56,35 @@ def test_read_returns_text_content(tmp_path: Path) -> None:
     assert result.ok is True
     assert result.data["content"] == "alpha"
     assert result.data["truncated"] is True
+
+
+def test_read_rejects_binary_files(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "image.bin").write_bytes(b"abc\x00def")
+
+    result = FileSystemTool([root]).run({"action": "read", "path": "image.bin"})
+
+    assert result.ok is False
+    assert "BinaryFile" in (result.error or "")
+
+
+def test_search_finds_file_names(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    write_text(root / "notes" / "project-plan.txt", "alpha")
+
+    result = FileSystemTool([root]).run({"action": "search", "mode": "name", "query": "plan"})
+
+    assert result.ok is True
+    assert result.data["matches"][0]["path"] == "notes/project-plan.txt"
+
+
+def test_search_finds_text_content(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    write_text(root / "notes" / "a.txt", "alpha target")
+    write_text(root / ".git" / "ignored.txt", "target")
+
+    result = FileSystemTool([root]).run({"action": "search", "mode": "content", "query": "target"})
+
+    assert result.ok is True
+    assert [match["path"] for match in result.data["matches"]] == ["notes/a.txt"]

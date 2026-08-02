@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 from typing import Any
 
 from copy_myself.tools.base import ToolResult
+
+
+SKIP_DIRS = {".git", ".pytest_cache", "__pycache__", ".venv", "venv", "node_modules", "dist", "build"}
 
 
 class FileSystemTool:
@@ -18,7 +22,7 @@ class FileSystemTool:
 
     def run(self, arguments: dict[str, Any]) -> ToolResult:
         action = arguments.get("action")
-        if action not in {"list", "stat", "read"}:
+        if action not in {"list", "stat", "read", "search"}:
             return ToolResult(
                 name=self.name,
                 ok=False,
@@ -31,6 +35,8 @@ class FileSystemTool:
                 return self._list(path)
             if action == "stat":
                 return self._stat(path)
+            if action == "search":
+                return self._search(path, arguments)
             return self._read(path, arguments)
         except OSError as exc:
             return ToolResult(name=self.name, ok=False, error=f"FileSystemError: {exc}")
@@ -46,6 +52,14 @@ class FileSystemTool:
         if not any(resolved == root or root in resolved.parents for root in self._allowed_roots):
             raise ValueError(f"PathOutsideRoot: {resolved}")
         return resolved
+
+    def _relative(self, path: Path) -> str:
+        for root in self._allowed_roots:
+            try:
+                return path.relative_to(root).as_posix()
+            except ValueError:
+                continue
+        raise ValueError(f"PathOutsideRoot: {path}")
 
     def _sha256(self, path: Path) -> str:
         digest = hashlib.sha256()
@@ -63,6 +77,7 @@ class FileSystemTool:
         stat = path.stat()
         return {
             "name": path.name,
+            "path": self._relative(path),
             "kind": "directory" if path.is_dir() else "file",
             "size": stat.st_size,
             "modified": stat.st_mtime,
@@ -75,12 +90,8 @@ class FileSystemTool:
         return ToolResult(name=self.name, ok=True, data={"action": "list", "entries": entries})
 
     def _stat(self, path: Path) -> ToolResult:
-        stat = path.stat()
-        data: dict[str, Any] = {
-            "kind": "directory" if path.is_dir() else "file",
-            "size": stat.st_size,
-            "modified": stat.st_mtime,
-        }
+        data = self._entry(path)
+        data["absolute_path"] = str(path)
         if path.is_file():
             data["sha256"] = self._sha256(path)
         return ToolResult(name=self.name, ok=True, data=data)
@@ -89,7 +100,7 @@ class FileSystemTool:
         if not path.is_file():
             raise ValueError(f"InvalidArguments: not a file {path}")
         if self._is_binary(path):
-            raise ValueError(f"InvalidArguments: binary file {path}")
+            raise ValueError(f"BinaryFile: {self._relative(path)}")
 
         offset = int(arguments.get("offset", 0))
         limit = min(int(arguments.get("limit", self._max_read_bytes)), self._max_read_bytes)
@@ -106,5 +117,53 @@ class FileSystemTool:
         return ToolResult(
             name=self.name,
             ok=True,
-            data={"action": "read", "content": content, "truncated": truncated},
+            data={
+                "action": "read",
+                "content": content,
+                "sha256": self._sha256(path),
+                "truncated": truncated,
+            },
+        )
+
+    def _walk_files(self, root: Path) -> list[Path]:
+        files: list[Path] = []
+        for current, dirs, names in os.walk(root):
+            dirs[:] = [name for name in dirs if name not in SKIP_DIRS]
+            for name in names:
+                files.append(Path(current) / name)
+        return files
+
+    def _search(self, root: Path, arguments: dict[str, Any]) -> ToolResult:
+        query = str(arguments.get("query", ""))
+        if not query:
+            raise ValueError("InvalidArguments: query is required")
+
+        mode = str(arguments.get("mode", "content"))
+        limit = int(arguments.get("limit", 50))
+        files = [root] if root.is_file() else self._walk_files(root)
+        matches: list[dict[str, Any]] = []
+
+        for path in files:
+            if len(matches) >= limit:
+                break
+            if mode == "name":
+                if query.casefold() in path.name.casefold():
+                    matches.append({"path": self._relative(path), "kind": "file"})
+                continue
+            if mode == "content":
+                if self._is_binary(path):
+                    continue
+                try:
+                    content = path.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    continue
+                if query in content:
+                    matches.append({"path": self._relative(path), "kind": "file"})
+                continue
+            raise ValueError(f"InvalidArguments: unsupported search mode {mode!r}")
+
+        return ToolResult(
+            name=self.name,
+            ok=True,
+            data={"action": "search", "query": query, "mode": mode, "matches": matches},
         )
