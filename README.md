@@ -55,6 +55,13 @@ copy-myself-gui
 The PyQt workbench calls the LangGraph agent directly and does not require the
 FastAPI server to be running.
 
+## Built-In Tools
+
+- `health`: returns a structured health-check result.
+- `filesystem`: lists, reads, searches, writes, patches, copies, moves, and safely deletes files inside the configured workspace root.
+
+The `filesystem` tool resolves every path before use, rejects paths outside the allowed root, blocks sensitive files such as `.git`, `.env`, and `keys`, requires hash checks before overwriting existing files, and moves confirmed deletes into `.trash/filesystem-tool/` by default.
+
 ## Test
 
 ```powershell

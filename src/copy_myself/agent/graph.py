@@ -14,12 +14,13 @@ from copy_myself.memory import InMemoryStore
 from copy_myself.memory.base import MemoryStore
 from copy_myself.llm.base import ModelClient
 from copy_myself.llm.openai_compatible import OpenAICompatibleClient
-from copy_myself.tools import HealthTool, ToolRegistry
+from copy_myself.tools import FileSystemTool, HealthTool, ToolRegistry
 
 
 def create_default_registry() -> ToolRegistry:
     registry = ToolRegistry()
     registry.register(HealthTool())
+    registry.register(FileSystemTool())
     return registry
 
 
