@@ -23,7 +23,7 @@ class FileSystemTool:
 
     def run(self, arguments: dict[str, Any]) -> ToolResult:
         action = arguments.get("action")
-        if action not in {"list", "stat", "read", "search", "write", "mkdir"}:
+        if action not in {"list", "stat", "read", "search", "write", "mkdir", "patch"}:
             return ToolResult(
                 name=self.name,
                 ok=False,
@@ -42,6 +42,8 @@ class FileSystemTool:
                 return self._write(path, arguments)
             if action == "mkdir":
                 return self._mkdir(path, arguments)
+            if action == "patch":
+                return self._patch(path, arguments)
             return self._read(path, arguments)
         except OSError as exc:
             return ToolResult(name=self.name, ok=False, error=f"FileSystemError: {exc}")
@@ -215,6 +217,55 @@ class FileSystemTool:
             ok=True,
             data={
                 "action": "write",
+                "path": self._relative(path),
+                "before_sha256": before_hash,
+                "after_sha256": self._sha256(path),
+                "changed": [self._relative(path)],
+            },
+        )
+
+    def _apply_simple_unified_diff(self, original: list[str], patch_text: str) -> list[str]:
+        lines = patch_text.splitlines(keepends=True)
+        hunk_lines = [
+            line
+            for line in lines
+            if not line.startswith("---") and not line.startswith("+++") and not line.startswith("@@")
+        ]
+        result: list[str] = []
+        index = 0
+        for line in hunk_lines:
+            if line.startswith(" "):
+                expected = line[1:]
+                if index >= len(original) or original[index] != expected:
+                    raise ValueError("PatchMismatch: context does not match target file")
+                result.append(original[index])
+                index += 1
+            elif line.startswith("-"):
+                expected = line[1:]
+                if index >= len(original) or original[index] != expected:
+                    raise ValueError("PatchMismatch: removed line does not match target file")
+                index += 1
+            elif line.startswith("+"):
+                result.append(line[1:])
+        result.extend(original[index:])
+        return result
+
+    def _patch(self, path: Path, arguments: dict[str, Any]) -> ToolResult:
+        self._ensure_not_sensitive(path)
+        if not path.is_file():
+            raise ValueError(f"InvalidArguments: not a file {self._relative(path)}")
+        if self._is_binary(path):
+            raise ValueError(f"BinaryFile: {self._relative(path)}")
+
+        before_hash = self._check_expected_hash(path, arguments.get("expected_hash"))
+        original = path.read_text(encoding="utf-8").splitlines(keepends=True)
+        updated = self._apply_simple_unified_diff(original, str(arguments.get("patch", "")))
+        path.write_text("".join(updated), encoding="utf-8")
+        return ToolResult(
+            name=self.name,
+            ok=True,
+            data={
+                "action": "patch",
                 "path": self._relative(path),
                 "before_sha256": before_hash,
                 "after_sha256": self._sha256(path),

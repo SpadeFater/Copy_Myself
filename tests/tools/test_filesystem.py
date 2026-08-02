@@ -159,3 +159,33 @@ def test_write_rejects_sensitive_paths(tmp_path: Path) -> None:
 
     assert result.ok is False
     assert "SensitivePath" in (result.error or "")
+
+
+def test_patch_updates_text_when_hash_matches(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    write_text(root / "a.txt", "alpha\nbeta\n")
+    current_hash = FileSystemTool([root]).run({"action": "stat", "path": "a.txt"}).data["sha256"]
+    patch = """--- a/a.txt
++++ b/a.txt
+@@ -1,2 +1,2 @@
+ alpha
+-beta
++gamma
+"""
+
+    result = FileSystemTool([root]).run(
+        {"action": "patch", "path": "a.txt", "patch": patch, "expected_hash": current_hash}
+    )
+
+    assert result.ok is True
+    assert (root / "a.txt").read_text(encoding="utf-8") == "alpha\ngamma\n"
+
+
+def test_patch_rejects_hash_mismatch(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    write_text(root / "a.txt", "alpha\n")
+
+    result = FileSystemTool([root]).run({"action": "patch", "path": "a.txt", "patch": "", "expected_hash": "bad"})
+
+    assert result.ok is False
+    assert "HashMismatch" in (result.error or "")
