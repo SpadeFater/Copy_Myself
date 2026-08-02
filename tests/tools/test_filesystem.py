@@ -88,3 +88,74 @@ def test_search_finds_text_content(tmp_path: Path) -> None:
 
     assert result.ok is True
     assert [match["path"] for match in result.data["matches"]] == ["notes/a.txt"]
+
+
+def test_write_creates_new_text_file(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+
+    result = FileSystemTool([root]).run(
+        {"action": "write", "path": "notes/a.txt", "content": "alpha", "create_parents": True}
+    )
+
+    assert result.ok is True
+    assert (root / "notes" / "a.txt").read_text(encoding="utf-8") == "alpha"
+    assert len(result.data["after_sha256"]) == 64
+
+
+def test_write_rejects_overwrite_without_expected_hash(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    target = write_text(root / "a.txt", "alpha")
+
+    result = FileSystemTool([root]).run({"action": "write", "path": "a.txt", "content": "beta"})
+
+    assert result.ok is False
+    assert "HashRequired" in (result.error or "")
+    assert target.read_text(encoding="utf-8") == "alpha"
+
+
+def test_write_rejects_hash_mismatch(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    target = write_text(root / "a.txt", "alpha")
+
+    result = FileSystemTool([root]).run(
+        {"action": "write", "path": "a.txt", "content": "beta", "expected_hash": "bad"}
+    )
+
+    assert result.ok is False
+    assert "HashMismatch" in (result.error or "")
+    assert target.read_text(encoding="utf-8") == "alpha"
+
+
+def test_write_allows_overwrite_when_hash_matches(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    target = write_text(root / "a.txt", "alpha")
+    current_hash = FileSystemTool([root]).run({"action": "stat", "path": "a.txt"}).data["sha256"]
+
+    result = FileSystemTool([root]).run(
+        {"action": "write", "path": "a.txt", "content": "beta", "expected_hash": current_hash}
+    )
+
+    assert result.ok is True
+    assert result.data["before_sha256"] == current_hash
+    assert target.read_text(encoding="utf-8") == "beta"
+
+
+def test_mkdir_creates_parent_chain(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+
+    result = FileSystemTool([root]).run({"action": "mkdir", "path": "a/b", "parents": True})
+
+    assert result.ok is True
+    assert (root / "a" / "b").is_dir()
+
+
+def test_write_rejects_sensitive_paths(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+
+    result = FileSystemTool([root]).run({"action": "write", "path": ".env", "content": "TOKEN=x"})
+
+    assert result.ok is False
+    assert "SensitivePath" in (result.error or "")

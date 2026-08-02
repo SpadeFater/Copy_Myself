@@ -9,6 +9,7 @@ from copy_myself.tools.base import ToolResult
 
 
 SKIP_DIRS = {".git", ".pytest_cache", "__pycache__", ".venv", "venv", "node_modules", "dist", "build"}
+SENSITIVE_NAMES = {".env", "keys", "id_rsa", "id_ed25519"}
 
 
 class FileSystemTool:
@@ -22,7 +23,7 @@ class FileSystemTool:
 
     def run(self, arguments: dict[str, Any]) -> ToolResult:
         action = arguments.get("action")
-        if action not in {"list", "stat", "read", "search"}:
+        if action not in {"list", "stat", "read", "search", "write", "mkdir"}:
             return ToolResult(
                 name=self.name,
                 ok=False,
@@ -37,6 +38,10 @@ class FileSystemTool:
                 return self._stat(path)
             if action == "search":
                 return self._search(path, arguments)
+            if action == "write":
+                return self._write(path, arguments)
+            if action == "mkdir":
+                return self._mkdir(path, arguments)
             return self._read(path, arguments)
         except OSError as exc:
             return ToolResult(name=self.name, ok=False, error=f"FileSystemError: {exc}")
@@ -72,6 +77,23 @@ class FileSystemTool:
         with path.open("rb") as file:
             sample = file.read(1024)
         return b"\x00" in sample
+
+    def _is_sensitive(self, path: Path) -> bool:
+        if ".git" in path.parts:
+            return True
+        return path.name in SENSITIVE_NAMES or path.name.startswith(".env.")
+
+    def _ensure_not_sensitive(self, path: Path) -> None:
+        if self._is_sensitive(path):
+            raise ValueError(f"SensitivePath: {self._relative(path)}")
+
+    def _check_expected_hash(self, path: Path, expected_hash: Any) -> str:
+        current_hash = self._sha256(path)
+        if not expected_hash:
+            raise ValueError(f"HashRequired: {self._relative(path)}")
+        if str(expected_hash) != current_hash:
+            raise ValueError(f"HashMismatch: {self._relative(path)}")
+        return current_hash
 
     def _entry(self, path: Path) -> dict[str, Any]:
         stat = path.stat()
@@ -166,4 +188,36 @@ class FileSystemTool:
             name=self.name,
             ok=True,
             data={"action": "search", "query": query, "mode": mode, "matches": matches},
+        )
+
+    def _mkdir(self, path: Path, arguments: dict[str, Any]) -> ToolResult:
+        self._ensure_not_sensitive(path)
+        path.mkdir(parents=bool(arguments.get("parents", False)), exist_ok=bool(arguments.get("exist_ok", True)))
+        return ToolResult(name=self.name, ok=True, data={"action": "mkdir", "path": self._relative(path)})
+
+    def _write(self, path: Path, arguments: dict[str, Any]) -> ToolResult:
+        self._ensure_not_sensitive(path)
+        content = str(arguments.get("content", ""))
+        if not path.parent.exists():
+            if not bool(arguments.get("create_parents", False)):
+                raise ValueError(f"InvalidArguments: parent does not exist {self._relative(path.parent)}")
+            path.parent.mkdir(parents=True, exist_ok=True)
+
+        before_hash = None
+        if path.exists():
+            if not path.is_file():
+                raise ValueError(f"InvalidArguments: not a file {self._relative(path)}")
+            before_hash = self._check_expected_hash(path, arguments.get("expected_hash"))
+
+        path.write_text(content, encoding="utf-8")
+        return ToolResult(
+            name=self.name,
+            ok=True,
+            data={
+                "action": "write",
+                "path": self._relative(path),
+                "before_sha256": before_hash,
+                "after_sha256": self._sha256(path),
+                "changed": [self._relative(path)],
+            },
         )
