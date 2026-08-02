@@ -19,7 +19,6 @@ dist/
 .venv/
 venv/
 env/
-.worktrees/
 
 # IDE and OS state
 .idea/

@@ -8,6 +8,7 @@ def test_create_initial_state_sets_predictable_defaults() -> None:
     assert state["messages"] == []
     assert state["intent"] == "unknown"
     assert state["tool_name"] is None
+    assert state["tool_arguments"] == {}
     assert state["tool_result"] is None
     assert state["memory_context"] == []
     assert state["response"] is None

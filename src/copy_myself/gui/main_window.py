@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt
+from math import ceil
+
+from PyQt6.QtCore import QTimer, QSize, Qt
 from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -12,6 +14,7 @@ from PyQt6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QPlainTextEdit,
     QPushButton,
     QSizePolicy,
     QTabWidget,
@@ -28,6 +31,94 @@ from copy_myself.config import (
     load_settings,
 )
 from copy_myself.gui.view_model import ChatMessage, RunSummary, WorkbenchViewModel
+
+
+THINKING_MESSAGE = "管家正在思考问题..."
+MESSAGE_BODY_MAX_HEIGHT = 420
+PENDING_RESPONSE_DELAY_MS = 60
+
+
+class ChatMessageWidget(QFrame):
+    def __init__(self, message: ChatMessage, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("UserMessage" if message.role == "user" else "AssistantMessage")
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+
+        self.message_body = QPlainTextEdit()
+        self.message_body.setObjectName("MessageText")
+        self.message_body.setPlainText(message.content)
+        self.message_body.setReadOnly(True)
+        self.message_body.setFrameShape(QFrame.Shape.NoFrame)
+        self.message_body.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self.message_body.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.message_body.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.message_body.document().setDocumentMargin(0)
+        self.message_body.setStyleSheet(
+            "QPlainTextEdit { background: transparent; border: none; color: #eff9ff; }"
+        )
+        self.message_body.viewport().setStyleSheet("background: transparent;")
+        self.message_body.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 10, 14, 10)
+        layout.addWidget(self.message_body)
+
+    def fit_to_width(self, width: int) -> None:
+        self.setFixedWidth(width)
+        inner_width = max(1, width - 28)
+        body_width = max(1, inner_width)
+        self.message_body.setFixedWidth(body_width)
+        self.message_body.document().setTextWidth(body_width)
+        text_height = self._text_height_for_width(body_width)
+        body_height = min(
+            MESSAGE_BODY_MAX_HEIGHT,
+            max(self.message_body.fontMetrics().lineSpacing() + 8, text_height + 8),
+        )
+        height = max(44, body_height + 20)
+        self.message_body.setFixedHeight(body_height)
+        self.setFixedHeight(height)
+
+    def _text_height_for_width(self, width: int) -> int:
+        metrics = self.message_body.fontMetrics()
+        line_spacing = metrics.lineSpacing()
+        available_width = max(1, width - 8)
+        visual_lines = 0
+        for paragraph in self.message_body.toPlainText().split("\n"):
+            if not paragraph:
+                visual_lines += 1
+                continue
+            visual_lines += max(1, ceil(metrics.horizontalAdvance(paragraph) / available_width))
+        return max(line_spacing, visual_lines * line_spacing)
+
+    def scroll_body_to_bottom(self) -> None:
+        scroll_bar = self.message_body.verticalScrollBar()
+        scroll_bar.setValue(scroll_bar.maximum())
+
+
+class ChatListWidget(QListWidget):
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self.resize_message_widgets()
+
+    def resize_message_widgets(self) -> None:
+        width = max(1, self.viewport().width() - 8)
+        for index in range(self.count()):
+            item = self.item(index)
+            widget = self.itemWidget(item)
+            if widget is None:
+                continue
+            widget.fit_to_width(width)
+            item.setSizeHint(QSize(width, widget.height() + 8))
+
+    def scroll_last_message_body_to_bottom(self) -> None:
+        if self.count() == 0:
+            return
+        widget = self.itemWidget(self.item(self.count() - 1))
+        if isinstance(widget, ChatMessageWidget):
+            widget.scroll_body_to_bottom()
 
 
 class MemoryDialog(QDialog):
@@ -55,7 +146,7 @@ class MemoryDialog(QDialog):
         root.addWidget(title)
         root.addWidget(subtitle)
 
-        context_label = QLabel("本次运行记忆")
+        context_label = QLabel("已保存记忆")
         context_label.setObjectName("SectionTitle")
         root.addWidget(context_label)
         root.addWidget(self.context_list, stretch=1)
@@ -74,7 +165,14 @@ class MemoryDialog(QDialog):
 
     def refresh(self) -> None:
         self.context_list.clear()
-        context = self._view_model.latest_run.memory_context if self._view_model.latest_run else []
+        if hasattr(self._view_model.memory, "list_nodes"):
+            nodes = self._view_model.memory.list_nodes(limit=100)
+            context = [
+                f"user: {node.user_input}\nassistant: {node.assistant_response}\nsummary: {node.summary}"
+                for node in nodes
+            ]
+        else:
+            context = self._view_model.memory.search("", limit=100)
         if context:
             self.context_list.addItems(context)
         else:
@@ -307,8 +405,14 @@ class MainWindow(QMainWindow):
         self.tool_buttons: dict[str, QToolButton] = {}
         self.memory_dialog: MemoryDialog | None = None
         self.settings_dialog: SettingsDialog | None = None
+        self._stream_timer = QTimer(self)
+        self._stream_timer.setInterval(18)
+        self._stream_timer.timeout.connect(self._advance_response_stream)
+        self._stream_text = ""
+        self._stream_index = 0
+        self._pending_message: str | None = None
 
-        self.chat_list = QListWidget()
+        self.chat_list = ChatListWidget()
         self.input_box = QLineEdit()
         self.send_button = QPushButton("发送")
         self.status_value = QLabel("standby")
@@ -459,20 +563,7 @@ class MainWindow(QMainWindow):
         self.intent_value.setWordWrap(True)
         layout.addWidget(self.intent_value)
 
-        footer = QFrame()
-        footer.setObjectName("FooterBar")
-        footer_layout = QHBoxLayout(footer)
-        footer_layout.setContentsMargins(0, 0, 0, 0)
-        footer_layout.setSpacing(10)
-
-        self.memory_button = QPushButton("完整记忆")
-        self.settings_button = QPushButton("设置")
-        self.memory_button.clicked.connect(self._open_memory_dialog)
-        self.settings_button.clicked.connect(self._open_settings_dialog)
-        footer_layout.addWidget(self.memory_button)
-        footer_layout.addWidget(self.settings_button)
         layout.addStretch()
-        layout.addWidget(footer)
         return inspector
 
     def _section_title(self, text: str) -> QLabel:
@@ -503,25 +594,99 @@ class MainWindow(QMainWindow):
         self.intent_value.setText("MCP 调用入口已就绪")
 
     def _send_message(self) -> None:
-        summary = self.view_model.send_message(self.input_box.text())
-        if summary is None:
+        self._finish_response_stream()
+        clean_message = self.input_box.text().strip()
+        if not clean_message or self._pending_message is not None:
             return
         self.input_box.clear()
+        self._pending_message = clean_message
+        self.view_model.messages.append(ChatMessage(role="user", content=clean_message))
+        self.view_model.messages.append(ChatMessage(role="assistant", content=THINKING_MESSAGE))
+        self.status_value.setText(THINKING_MESSAGE)
+        self.send_button.setEnabled(False)
+        self.input_box.setEnabled(False)
         self._refresh_messages()
-        self._refresh_inspector(summary)
-        self.status_value.setText(summary.intent)
+        self.chat_list.viewport().repaint()
+        QTimer.singleShot(PENDING_RESPONSE_DELAY_MS, self._complete_pending_message)
 
-    def _refresh_messages(self) -> None:
+    def _complete_pending_message(self) -> None:
+        pending_message = self._pending_message
+        if pending_message is None:
+            return
+        self._pending_message = None
+        self._remove_thinking_placeholder(pending_message)
+        messages_before = len(self.view_model.messages)
+        try:
+            summary = self.view_model.send_message(pending_message)
+        finally:
+            self.send_button.setEnabled(True)
+            self.input_box.setEnabled(True)
+        if summary is None:
+            self._refresh_messages()
+            return
+        if len(self.view_model.messages) == messages_before:
+            self.view_model.messages.append(ChatMessage(role="user", content=pending_message))
+            self.view_model.messages.append(ChatMessage(role="assistant", content=summary.response))
+        self._refresh_inspector(summary)
+        self.status_value.setText(summary.stage_label)
+        self._start_response_stream(summary.response)
+
+    def _remove_thinking_placeholder(self, message: str) -> None:
+        if len(self.view_model.messages) < 2:
+            return
+        user_message = self.view_model.messages[-2]
+        assistant_message = self.view_model.messages[-1]
+        if (
+            user_message == ChatMessage(role="user", content=message)
+            and assistant_message == ChatMessage(role="assistant", content=THINKING_MESSAGE)
+        ):
+            del self.view_model.messages[-2:]
+
+    def _refresh_messages(self, follow_latest_body: bool = False) -> None:
         self.chat_list.clear()
         for message in self.view_model.messages:
-            self.chat_list.addItem(self._format_message_item(message))
+            item = QListWidgetItem()
+            widget = ChatMessageWidget(message)
+            self.chat_list.addItem(item)
+            self.chat_list.setItemWidget(item, widget)
+            item.setSizeHint(widget.sizeHint())
+        self.chat_list.resize_message_widgets()
+        if follow_latest_body:
+            self.chat_list.scroll_last_message_body_to_bottom()
         self.chat_list.scrollToBottom()
 
-    def _format_message_item(self, message: ChatMessage) -> QListWidgetItem:
-        speaker = "我" if message.role == "user" else "Copy_Myself"
-        item = QListWidgetItem(f"{speaker}: {message.content}")
-        item.setTextAlignment(Qt.AlignmentFlag.AlignLeft)
-        return item
+    def _start_response_stream(self, response: str) -> None:
+        self._finish_response_stream()
+        if not self.view_model.messages:
+            return
+        self._stream_text = response
+        self._stream_index = 0
+        self.view_model.messages[-1] = ChatMessage(role="assistant", content="")
+        self._refresh_messages(follow_latest_body=True)
+        if response:
+            self._stream_timer.start()
+
+    def _advance_response_stream(self) -> None:
+        self._stream_index = min(self._stream_index + 2, len(self._stream_text))
+        self.view_model.messages[-1] = ChatMessage(
+            role="assistant",
+            content=self._stream_text[: self._stream_index],
+        )
+        self._refresh_messages(follow_latest_body=True)
+        if self._stream_index >= len(self._stream_text):
+            self._finish_response_stream()
+
+    def _finish_response_stream(self) -> None:
+        if self._stream_timer.isActive():
+            self._stream_timer.stop()
+        if self._stream_text and self.view_model.messages:
+            self.view_model.messages[-1] = ChatMessage(
+                role="assistant",
+                content=self._stream_text,
+            )
+            self._refresh_messages(follow_latest_body=True)
+        self._stream_text = ""
+        self._stream_index = 0
 
     def _refresh_inspector(self, summary: RunSummary | None) -> None:
         self.execution_list.clear()
@@ -538,7 +703,7 @@ class MainWindow(QMainWindow):
         for item in self._build_plan_items(summary):
             self.plan_list.addItem(item)
 
-        self.intent_value.setText(summary.intent if summary else "standby")
+        self.intent_value.setText(summary.display_intent if summary else "standby")
 
     def _build_plan_items(self, summary: RunSummary | None) -> list[str]:
         if summary:
@@ -646,7 +811,7 @@ QListWidget, QLineEdit, QComboBox {
     padding: 10px;
 }
 QListWidget::item {
-    padding: 8px 6px;
+    padding: 4px 0px;
 }
 QListWidget::item:selected {
     background: rgba(53, 215, 255, 0.16);
@@ -654,5 +819,19 @@ QListWidget::item:selected {
 }
 #ChatList {
     min-height: 320px;
+}
+#UserMessage, #AssistantMessage {
+    border-radius: 10px;
+}
+#UserMessage {
+    background: rgba(24, 77, 137, 0.8);
+    border: 1px solid rgba(124, 210, 255, 0.35);
+}
+#AssistantMessage {
+    background: rgba(7, 28, 54, 0.92);
+    border: 1px solid rgba(95, 190, 255, 0.22);
+}
+#MessageText {
+    color: #eff9ff;
 }
 """
