@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import zipfile
 from pathlib import Path
 
-from copy_myself.tools.filesystem import FileSystemTool
+from tools.filesystem import FileSystemTool
 
 
 def write_text(path: Path, content: str) -> Path:
@@ -67,6 +68,30 @@ def test_read_rejects_binary_files(tmp_path: Path) -> None:
 
     assert result.ok is False
     assert "BinaryFile" in (result.error or "")
+
+
+def test_read_extracts_docx_text(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    document = root / "resume.docx"
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:body>"
+        "<w:p><w:r><w:t>田恒佳</w:t></w:r></w:p>"
+        "<w:p><w:r><w:t>Python 后端工程师</w:t></w:r></w:p>"
+        "</w:body>"
+        "</w:document>"
+    )
+    with zipfile.ZipFile(document, "w") as archive:
+        archive.writestr("word/document.xml", xml)
+
+    result = FileSystemTool([root]).run({"action": "read", "path": "resume.docx"})
+
+    assert result.ok is True
+    assert result.data["action"] == "read"
+    assert "田恒佳" in result.data["content"]
+    assert "Python 后端工程师" in result.data["content"]
 
 
 def test_search_finds_file_names(tmp_path: Path) -> None:

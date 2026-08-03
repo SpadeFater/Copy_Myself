@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from copy_myself.config import (
+from config import (
     McpServiceSettings,
     ModelProviderSettings,
     import_mcp_service_setting,

@@ -23,7 +23,7 @@ copy-myself "what time is it in Asia/Shanghai?"
 Or:
 
 ```powershell
-python -m copy_myself.cli "帮我整理任务"
+python -m cli "帮我整理任务"
 ```
 
 If Chinese text appears garbled in Windows PowerShell, switch the current
@@ -52,7 +52,7 @@ The API listens on `http://127.0.0.1:8000` and exposes:
 copy-myself-gui
 ```
 
-The PyQt workbench calls the LangGraph agent directly and does not require the
+The PyQt workbench uses `agent.service.ChatService` and does not require the
 FastAPI server to be running.
 
 ### Workbench Interface
@@ -81,21 +81,23 @@ The `filesystem` tool resolves every path before use, rejects paths outside allo
 
 ```powershell
 python -m pytest -v
-python -m compileall -q src tests
+python -m compileall -q .
 ```
 
 ## Structure
 
 ```text
-src/copy_myself/
-  agent/      LangGraph state, nodes, and graph assembly
-  api/        FastAPI integration routes
-  gui/        PyQt desktop workbench
-  memory/     Memory protocol and in-memory implementation
-  tools/      Tool protocol, registry, time tool, and filesystem tool
-  cli.py      Local command-line entry point
-  config.py   Environment-driven settings
-  logging.py  Logging setup
+agent/        LangGraph state, nodes, graph assembly, runner, and ChatService
+api/          FastAPI integration routes
+domain/       Pure business objects
+gui/          PyQt desktop workbench
+llm/          Model protocols and providers
+memory/       Memory code package
+memoryGraphData/ Runtime SQLite data
+tools/        Tool protocol, registry, time tool, and filesystem tool
+cli.py        Local command-line entry point
+config.py     Environment-driven settings
+app_logging.py Logging setup
 docs/
   architecture.md
   superpowers/specs/

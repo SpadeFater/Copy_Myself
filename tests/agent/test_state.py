@@ -1,4 +1,4 @@
-from copy_myself.agent.state import create_initial_state
+from agent.state import create_initial_state
 
 
 def test_create_initial_state_sets_predictable_defaults() -> None:

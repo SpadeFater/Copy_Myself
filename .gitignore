@@ -20,6 +20,10 @@ dist/
 venv/
 env/
 
+# Runtime memory data
+/memoryGraphData/
+/gui/memoryGraphData/
+
 # IDE and OS state
 .idea/
 .vscode/

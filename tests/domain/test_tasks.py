@@ -1,4 +1,4 @@
-from copy_myself.domain.tasks import DailyPlan, TaskItem, TaskPriority, TaskStatus
+from domain.tasks import DailyPlan, TaskItem, TaskPriority, TaskStatus
 
 
 def test_task_item_defaults_to_todo() -> None:

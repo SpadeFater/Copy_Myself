@@ -1,4 +1,4 @@
-from copy_myself.memory import (
+from memory import (
     EpisodeMemory,
     PreferenceMemory,
     ProjectMemory,

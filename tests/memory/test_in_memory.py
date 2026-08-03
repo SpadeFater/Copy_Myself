@@ -1,4 +1,4 @@
-from copy_myself.memory import InMemoryStore
+from memory import InMemoryStore
 
 
 def test_memory_store_saves_and_searches_records() -> None:

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from copy_myself.gui.view_model import WorkbenchViewModel
+from gui.view_model import WorkbenchViewModel
 
 
 def test_view_model_starts_with_welcome_message(monkeypatch, tmp_path) -> None:

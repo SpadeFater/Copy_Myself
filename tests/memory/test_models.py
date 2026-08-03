@@ -2,7 +2,7 @@ import json
 import math
 
 import pytest
-from copy_myself.memory import (
+from memory import (
     EpisodeMemory,
     MemoryEdge,
     MemoryNode,

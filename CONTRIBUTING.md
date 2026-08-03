@@ -21,7 +21,7 @@ Run these before reporting backend or GUI logic complete:
 
 ```powershell
 python -m pytest -v
-python -m compileall -q src tests
+python -m compileall -q .
 ```
 
 For PyQt GUI changes, also launch the desktop workbench after `PyQt6` is installed:
@@ -35,8 +35,10 @@ Do not mark GUI startup verified unless the window launches successfully.
 ## Development Rules
 
 - Keep LangGraph as the orchestration boundary.
-- Keep PyQt widgets under `src/copy_myself/gui/`.
-- Keep testable GUI state in non-widget modules such as `src/copy_myself/gui/view_model.py`.
+- Keep PyQt widgets under `gui/`.
+- Keep testable GUI state in non-widget modules such as `gui/view_model.py`.
+- Route API, GUI, and CLI chat flows through `agent.service.ChatService`.
+- Keep runtime SQLite data under `memoryGraphData/`, outside the `memory/` code package.
 - Keep external API calls behind adapters and out of graph nodes, widgets, and tests.
 - Start each milestone from a focused plan in `docs/superpowers/plans/`.
 - Prefer small, focused changes that follow the existing package structure.

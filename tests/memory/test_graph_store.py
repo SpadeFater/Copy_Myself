@@ -4,7 +4,7 @@ import sqlite3
 
 import pytest
 
-from copy_myself.memory import GraphMemoryStore, MemoryEdge, extract_memory_node
+from memory import GraphMemoryStore, MemoryEdge, extract_memory_node
 
 
 def test_graph_store_initializes_schema_and_handles_empty_exchange(tmp_path) -> None:

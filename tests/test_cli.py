@@ -1,4 +1,4 @@
-from copy_myself.cli import format_response
+from cli import format_response
 
 
 def test_format_response_returns_assistant_line() -> None:
