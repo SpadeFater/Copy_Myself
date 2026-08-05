@@ -177,12 +177,15 @@ class ModelSettings:
 @dataclass(frozen=True)
 class McpServiceSettings:
     name: str
+    service_id: str = ""
     endpoint: str = ""
     transport: str = "stdio"
     command: str = ""
     args: tuple[str, ...] = ()
     headers: dict[str, str] = field(default_factory=dict)
+    env: dict[str, str] = field(default_factory=dict)
     enabled: bool = True
+    timeout_seconds: float = 30.0
 
     def __post_init__(self) -> None:
         name = _clean_text(self.name)
@@ -190,34 +193,51 @@ class McpServiceSettings:
             raise ValueError("MCP service name is required.")
 
         object.__setattr__(self, "name", name)
+        service_id = _clean_text(self.service_id)
+        if service_id is None:
+            service_id = "-".join(part for part in "".join(character.lower() if character.isalnum() else " " for character in name).split()) or "service"
+        if any(character not in "abcdefghijklmnopqrstuvwxyz0123456789-_" for character in service_id):
+            raise ValueError("MCP service_id must use lowercase letters, numbers, '-' or '_'.")
+        object.__setattr__(self, "service_id", service_id)
         object.__setattr__(self, "endpoint", _clean_text(self.endpoint) or "")
-        object.__setattr__(self, "transport", _clean_text(self.transport) or "stdio")
+        transport = _clean_text(self.transport) or "stdio"
+        object.__setattr__(self, "transport", "streamable_http" if transport == "http" else transport)
         object.__setattr__(self, "command", _clean_text(self.command) or "")
         object.__setattr__(self, "args", _coerce_string_sequence(self.args))
         object.__setattr__(self, "headers", _coerce_string_mapping(self.headers))
+        object.__setattr__(self, "env", _coerce_string_mapping(self.env))
         object.__setattr__(self, "enabled", bool(self.enabled))
+        object.__setattr__(self, "timeout_seconds", float(self.timeout_seconds))
 
     def to_record(self) -> dict[str, object]:
         return {
             "name": self.name,
+            "service_id": self.service_id,
             "endpoint": self.endpoint,
             "transport": self.transport,
             "command": self.command,
             "args": list(self.args),
             "headers": dict(self.headers),
+            "env": dict(self.env),
             "enabled": self.enabled,
+            "timeout_seconds": self.timeout_seconds,
         }
 
     @classmethod
     def from_record(cls, data: Mapping[str, Any]) -> McpServiceSettings:
+        if data.get("service_id") == "builtin":
+            raise ValueError("MCP service_id 'builtin' is reserved.")
         return cls(
             name=data.get("name", ""),
+            service_id=data.get("service_id", ""),
             endpoint=data.get("endpoint", data.get("url", "")),
             transport=data.get("transport", "stdio"),
             command=data.get("command", ""),
             args=_coerce_string_sequence(data.get("args")),
             headers=_coerce_string_mapping(data.get("headers")),
+            env=_coerce_string_mapping(data.get("env")),
             enabled=bool(data.get("enabled", True)),
+            timeout_seconds=float(data.get("timeout_seconds", 30.0)),
         )
 
 
@@ -301,7 +321,12 @@ def import_model_provider_setting(
 
 def load_mcp_service_settings(path: str | Path | None = None) -> tuple[McpServiceSettings, ...]:
     store_path = Path(path) if path is not None else default_mcp_services_path()
-    return tuple(McpServiceSettings.from_record(item) for item in _read_json_records(store_path))
+    records = _read_json_records(store_path)
+    services = tuple(McpServiceSettings.from_record(item) for item in records)
+    _validate_mcp_services(services)
+    if records and any(not _clean_text(item.get("service_id")) for item in records):
+        _write_json_records(store_path, [service.to_record() for service in services])
+    return services
 
 
 def list_mcp_service_settings(path: str | Path | None = None) -> tuple[McpServiceSettings, ...]:
@@ -317,8 +342,19 @@ def save_mcp_service_settings(
         service if isinstance(service, McpServiceSettings) else McpServiceSettings.from_record(service)
         for service in services
     )
+    _validate_mcp_services(normalized)
     _write_json_records(store_path, [service.to_record() for service in normalized])
     return normalized
+
+
+def _validate_mcp_services(services: Iterable[McpServiceSettings]) -> None:
+    service_ids: set[str] = set()
+    for service in services:
+        if service.service_id == "builtin":
+            raise ValueError("MCP service_id 'builtin' is reserved.")
+        if service.service_id in service_ids:
+            raise ValueError(f"Duplicate MCP service_id: {service.service_id}")
+        service_ids.add(service.service_id)
 
 
 def import_mcp_service_settings(
@@ -331,7 +367,7 @@ def import_mcp_service_settings(
     updated: list[McpServiceSettings] = []
     replaced = False
     for item in existing:
-        if item.name == imported.name:
+        if item.service_id == imported.service_id:
             updated.append(imported)
             replaced = True
         else:
@@ -351,12 +387,14 @@ def import_mcp_service_setting(
     args: Iterable[str] = (),
     headers: Mapping[str, str] | None = None,
     enabled: bool = True,
+    service_id: str = "",
 ) -> McpServiceSettings:
     clean_value = _clean_text(value) or ""
     clean_name = _clean_text(name) or clean_value or "External MCP"
     return import_mcp_service_settings(
         McpServiceSettings(
             name=clean_name,
+            service_id=service_id,
             endpoint=clean_value,
             transport=transport,
             command=command,

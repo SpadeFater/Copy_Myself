@@ -7,8 +7,6 @@ from config import load_settings
 from llm.base import ModelClient
 from llm.openai_compatible import OpenAICompatibleClient
 from memory import GraphMemoryStore
-from tools import TimeTool, ToolRegistry
-from tools.filesystem import FileSystemTool
 
 MEMORY_PATH_ENV = "COPY_MYSELF_MEMORY_PATH"
 FILESYSTEM_ROOTS_ENV = "COPY_MYSELF_FILESYSTEM_ROOTS"
@@ -31,13 +29,6 @@ def default_filesystem_roots() -> list[Path]:
             unique_roots.append(resolved)
             seen.add(resolved)
     return unique_roots
-
-
-def create_default_registry() -> ToolRegistry:
-    registry = ToolRegistry()
-    registry.register(TimeTool())
-    registry.register(FileSystemTool(default_filesystem_roots()))
-    return registry
 
 
 def build_model_client() -> ModelClient | None:

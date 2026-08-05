@@ -18,9 +18,11 @@ class ButlerState(TypedDict):
     memory_context: list[str]
     response: str | None
     error: str | None
+    session_id: str
+    tool_definitions: list[dict[str, Any]]
 
 
-def create_initial_state(user_input: str) -> ButlerState:
+def create_initial_state(user_input: str, session_id: str = "default") -> ButlerState:
     return {
         "user_input": user_input,
         "messages": [],
@@ -31,4 +33,6 @@ def create_initial_state(user_input: str) -> ButlerState:
         "memory_context": [],
         "response": None,
         "error": None,
+        "session_id": session_id,
+        "tool_definitions": [],
     }

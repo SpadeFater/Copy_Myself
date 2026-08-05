@@ -45,6 +45,11 @@ The API listens on `http://127.0.0.1:8000` and exposes:
 
 - `GET /api/status`
 - `POST /api/chat`
+- `POST /api/approvals/{approval_id}`
+
+Tool calls requiring confirmation return HTTP 202 with a `pending_approval`
+object. Submit the decision to the approval endpoint with `session_id` and
+`approved`; the same LangGraph execution then resumes.
 
 ## Run PyQt Workbench
 
@@ -70,6 +75,20 @@ commercial licenses before distributing a closed-source build. The execution
 graph uses a native PyQt6 renderer because NodeGraphQt 0.6.44 is not compatible
 with the Qt 6.11 enum API used by the current environment.
 
+## MCP Gateway
+
+All tools run through the official Python MCP SDK. The agent opens one stdio
+connection to `copy-myself-mcp-gateway`; the gateway maintains asynchronous
+connections to the builtin stdio server and configured third-party stdio or
+Streamable HTTP servers. Model-visible names use `service_id__tool`, while the
+gateway audit/catalog identity uses `service_id/tool`.
+
+Third-party calls always require confirmation. Builtin filesystem
+`list/stat/read/search` calls run automatically; `write/mkdir/patch/copy/move/delete`
+require a one-time approval bound to the session, canonical tool, argument
+SHA-256, and TTL. CLI uses `y/N`, API uses HTTP 202 and the approval endpoint,
+and the Qt GUI uses a non-blocking confirmation dialog.
+
 ## Built-In Tools
 
 - `getTime`: returns the current time for an IANA timezone or supported location.
@@ -87,14 +106,15 @@ python -m compileall -q .
 ## Structure
 
 ```text
-agent/        LangGraph state, nodes, graph assembly, runner, and ChatService
+agent/        LangGraph runtime, Gateway MCP client, coordinator, and ChatService
 api/          FastAPI integration routes
+builtin_mcp/  FastMCP server and builtin tool implementations
 domain/       Pure business objects
 gui/          PyQt desktop workbench
 llm/          Model protocols and providers
 memory/       Memory code package
+mcp_gateway/  MCP proxy, connections, catalog, policy, approvals, and audit
 memoryGraphData/ Runtime SQLite data
-tools/        Tool protocol, registry, time tool, and filesystem tool
 cli.py        Local command-line entry point
 config.py     Environment-driven settings
 app_logging.py Logging setup
@@ -105,10 +125,10 @@ docs/
 tests/
 ```
 
-## Next Milestones
+## Configure External MCP
 
-1. Decide the first concrete personal-butler capability.
-2. Add a real LLM adapter behind the existing node boundary.
-3. Replace in-memory storage with persistent memory.
-4. Add richer tool modules for tasks, reminders, notes, or schedules.
-5. Feed real per-node timing and status events into the execution trace.
+Each service has a stable unique `service_id`, `stdio` or `streamable_http`
+transport, a command plus argument array or endpoint, optional headers/env,
+and a finite timeout. The reserved `builtin` ID cannot be configured by users.
+The gateway isolates an offline external service so other tools and plain chat
+remain available.

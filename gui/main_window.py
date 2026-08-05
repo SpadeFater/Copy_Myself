@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from PyQt6.QtCore import QTimer, Qt
+import asyncio
+from uuid import uuid4
+
+from PyQt6.QtCore import QThread, QTimer, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -12,7 +15,7 @@ from PyQt6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
-    QPlainTextEdit,
+    QMessageBox,
     QPushButton,
     QSizePolicy,
     QTabWidget,
@@ -30,6 +33,7 @@ from config import (
 )
 from gui.view_model import ChatMessage, RunSummary, WorkbenchViewModel
 from gui.execution_graph import ExecutionGraphDialog
+from gui.memory_graph import MemoryGraphPanel
 from gui.theme import WORKBENCH_QSS, apply_workbench_theme, fluent_icon
 from gui.widgets import (
     MESSAGE_BODY_MAX_HEIGHT,
@@ -37,114 +41,48 @@ from gui.widgets import (
     ChatMessageWidget,
     ExecutionStepWidget,
 )
+from agent.service import ChatRunResult, ChatService
 
 
 THINKING_MESSAGE = "管家正在思考问题..."
 PENDING_RESPONSE_DELAY_MS = 60
 
 
-class MemoryDialog(QDialog):
-    def __init__(self, view_model: WorkbenchViewModel, parent: QWidget | None = None) -> None:
+class ChatWorker(QThread):
+    completed = pyqtSignal(object)
+    approval_required = pyqtSignal(object)
+    failed = pyqtSignal(str)
+
+    def __init__(self, message: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._view_model = view_model
-        self.context_list = QListWidget()
-        self.memory_detail = QPlainTextEdit()
-        self.message_list = QListWidget()
-        self.setObjectName("MemoryDialog")
-        self.context_list.setObjectName("MemoryContextList")
-        self.memory_detail.setObjectName("MemoryDetail")
-        self.message_list.setObjectName("MemoryMessageList")
-        self.memory_detail.setReadOnly(True)
-        self.memory_detail.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self.message = message
+        self.session_id = f"gui-{uuid4().hex}"
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._decision: asyncio.Future[bool] | None = None
 
-        self.setWindowTitle("完整记忆")
-        self.setModal(False)
-        self.resize(760, 520)
-        self._build_ui()
-        self.refresh()
+    def run(self) -> None:
+        try:
+            asyncio.run(self._run_conversation())
+        except Exception as exc:
+            self.failed.emit(str(exc))
 
-    def _build_ui(self) -> None:
-        root = QVBoxLayout(self)
-        root.setContentsMargins(20, 20, 20, 20)
-        root.setSpacing(14)
+    async def _run_conversation(self) -> None:
+        self._loop = asyncio.get_running_loop()
+        service = ChatService()
+        try:
+            result = await service.achat(self.message, self.session_id)
+            while result.status == "pending_approval" and result.pending_approval is not None:
+                self._decision = self._loop.create_future()
+                self.approval_required.emit(result.pending_approval)
+                approved = await self._decision
+                result = await service.resume(result.pending_approval.approval_id, approved, self.session_id)
+            self.completed.emit(result)
+        finally:
+            await service.runner.close()
 
-        title = QLabel("完整记忆")
-        title.setObjectName("DialogTitle")
-        subtitle = QLabel("点击查看，不占用主工作台空间")
-        subtitle.setObjectName("DialogSubtitle")
-        root.addWidget(title)
-        root.addWidget(subtitle)
-
-        context_label = QLabel("已保存记忆")
-        context_label.setObjectName("SectionTitle")
-        root.addWidget(context_label)
-        root.addWidget(self.context_list, stretch=1)
-        root.addWidget(self.memory_detail, stretch=2)
-
-        message_label = QLabel("近期对话")
-        message_label.setObjectName("SectionTitle")
-        root.addWidget(message_label)
-        root.addWidget(self.message_list, stretch=1)
-
-        footer = QHBoxLayout()
-        footer.addStretch()
-        close_button = QPushButton("关闭")
-        close_button.setObjectName("DialogSecondaryButton")
-        close_button.clicked.connect(self.close)
-        footer.addWidget(close_button)
-        root.addLayout(footer)
-        self.context_list.currentItemChanged.connect(self._show_selected_memory)
-
-    def refresh(self) -> None:
-        self.context_list.clear()
-        if hasattr(self._view_model.memory, "list_nodes"):
-            nodes = self._view_model.memory.list_nodes(limit=100)
-            context = []
-            for node in nodes:
-                full_text = (
-                    f"user: {node.user_input}\n"
-                    f"assistant: {node.assistant_response}\n"
-                    f"summary: {node.summary}"
-                )
-                context.append((self._memory_preview(node.user_input, node.summary), full_text))
-        else:
-            context = [
-                (self._memory_preview(item, item), item)
-                for item in self._view_model.memory.search("", limit=100)
-            ]
-        if context:
-            for preview, full_text in context:
-                item = QListWidgetItem(preview)
-                item.setData(Qt.ItemDataRole.UserRole, full_text)
-                self.context_list.addItem(item)
-            self.context_list.setCurrentRow(0)
-        else:
-            self.context_list.addItem("暂无记忆内容")
-            self.memory_detail.clear()
-
-        self.message_list.clear()
-        for message in self._view_model.messages[-10:]:
-            speaker = "我" if message.role == "user" else "Copy_Myself"
-            self.message_list.addItem(f"{speaker}: {message.content}")
-
-    def _show_selected_memory(
-        self,
-        current: QListWidgetItem | None,
-        previous: QListWidgetItem | None,
-    ) -> None:
-        if current is None:
-            self.memory_detail.clear()
-            return
-        full_text = current.data(Qt.ItemDataRole.UserRole)
-        self.memory_detail.setPlainText(full_text if isinstance(full_text, str) else current.text())
-        self.memory_detail.moveCursor(self.memory_detail.textCursor().MoveOperation.Start)
-
-    def _memory_preview(self, title: str, summary: str, limit: int = 96) -> str:
-        preview = " · ".join(part.strip() for part in (title, summary) if part.strip())
-        preview = " ".join(preview.split())
-        if len(preview) <= limit:
-            return preview
-        return f"{preview[: limit - 3]}..."
+    def decide(self, approved: bool) -> None:
+        if self._loop is not None and self._decision is not None and not self._decision.done():
+            self._loop.call_soon_threadsafe(self._decision.set_result, approved)
 
 
 class SettingsDialog(QDialog):
@@ -386,7 +324,6 @@ class MainWindow(QMainWindow):
 
         self.nav_buttons: dict[str, QPushButton] = {}
         self.tool_buttons: dict[str, QToolButton] = {}
-        self.memory_dialog: MemoryDialog | None = None
         self.settings_dialog: SettingsDialog | None = None
         self._stream_timer = QTimer(self)
         self._stream_timer.setInterval(18)
@@ -394,6 +331,8 @@ class MainWindow(QMainWindow):
         self._stream_text = ""
         self._stream_index = 0
         self._pending_message: str | None = None
+        self._chat_worker: ChatWorker | None = None
+        self._approval_dialog: QMessageBox | None = None
 
         self.chat_list = ChatListWidget()
         self.input_box = QLineEdit()
@@ -409,6 +348,7 @@ class MainWindow(QMainWindow):
         self.execution_graph_button.setObjectName("ExecutionGraphButton")
         self.execution_graph_button.setIcon(fluent_icon("CODE"))
         self.execution_graph_dialog: ExecutionGraphDialog | None = None
+        self.memory_graph_panel = MemoryGraphPanel(self.view_model.memory)
 
         self._build_ui()
         self._connect_events()
@@ -418,10 +358,11 @@ class MainWindow(QMainWindow):
     def _build_ui(self) -> None:
         root = QWidget()
         root.setObjectName("WorkbenchRoot")
-        root_layout = QVBoxLayout(root)
+        root_layout = QHBoxLayout(root)
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
 
+        root_layout.addWidget(self.memory_graph_panel)
         root_layout.addWidget(self._build_center_panel(), stretch=1)
 
         self.setCentralWidget(root)
@@ -457,8 +398,8 @@ class MainWindow(QMainWindow):
         nav_section.setObjectName("SidebarSection")
         layout.addWidget(nav_section)
 
-        nav_icons = {"工作台": "HOME", "记忆": "HISTORY", "设置": "SETTING"}
-        for text in ("工作台", "记忆", "设置"):
+        nav_icons = {"工作台": "HOME", "设置": "SETTING"}
+        for text in ("工作台", "设置"):
             button = QPushButton(text)
             button.setObjectName("SidebarButton")
             button.setIcon(fluent_icon(nav_icons[text]))
@@ -490,8 +431,8 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(brand)
         header_layout.addStretch()
 
-        nav_icons = {"记忆": "HISTORY", "设置": "SETTING"}
-        for text in ("记忆", "设置"):
+        nav_icons = {"设置": "SETTING"}
+        for text in ("设置",):
             button = QToolButton()
             button.setObjectName("NavButton")
             button.setIcon(fluent_icon(nav_icons[text]))
@@ -638,9 +579,7 @@ class MainWindow(QMainWindow):
     def _handle_nav_click(self, name: str) -> None:
         for button_name, button in self.nav_buttons.items():
             button.setChecked(button_name == name)
-        if name == "记忆":
-            self._open_memory_dialog()
-        elif name == "设置":
+        if name == "设置":
             self._open_settings_dialog()
 
     def _select_builtin_tools(self) -> None:
@@ -671,23 +610,60 @@ class MainWindow(QMainWindow):
         pending_message = self._pending_message
         if pending_message is None:
             return
+        worker = ChatWorker(pending_message, self)
+        self._chat_worker = worker
+        worker.completed.connect(self._complete_worker_result)
+        worker.approval_required.connect(self._show_approval_dialog)
+        worker.failed.connect(self._complete_worker_error)
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
+
+    def _complete_worker_result(self, result: ChatRunResult) -> None:
+        pending_message = self._pending_message or result.message
         self._pending_message = None
-        self._remove_thinking_placeholder(pending_message)
-        messages_before = len(self.view_model.messages)
-        try:
-            summary = self.view_model.send_message(pending_message)
-        finally:
-            self.send_button.setEnabled(True)
-            self.input_box.setEnabled(True)
-        if summary is None:
-            self._refresh_messages()
-            return
-        if len(self.view_model.messages) == messages_before:
-            self.view_model.messages.append(ChatMessage(role="user", content=pending_message))
+        summary = RunSummary(
+            message=pending_message,
+            response=result.response,
+            intent=result.intent,
+            display_intent=result.display_intent,
+            stage_label=result.display_intent,
+            tool_result=result.tool_result,
+            memory_context=result.memory_context,
+            graph_steps=result.graph_steps,
+        )
+        self.view_model.latest_run = summary
+        if self.view_model.messages and self.view_model.messages[-1].content == THINKING_MESSAGE:
+            self.view_model.messages[-1] = ChatMessage(role="assistant", content=summary.response)
+        else:
             self.view_model.messages.append(ChatMessage(role="assistant", content=summary.response))
+        self.send_button.setEnabled(True)
+        self.input_box.setEnabled(True)
+        self.memory_graph_panel.refresh()
         self._refresh_inspector(summary)
         self.status_value.setText(summary.stage_label)
         self._start_response_stream(summary.response)
+
+    def _complete_worker_error(self, message: str) -> None:
+        self._pending_message = None
+        if self.view_model.messages and self.view_model.messages[-1].content == THINKING_MESSAGE:
+            self.view_model.messages[-1] = ChatMessage(role="assistant", content=message)
+        self.send_button.setEnabled(True)
+        self.input_box.setEnabled(True)
+        self.status_value.setText("failed")
+        self._refresh_messages()
+
+    def _show_approval_dialog(self, pending) -> None:
+        dialog = QMessageBox(QMessageBox.Icon.Warning, "Tool approval", f"{pending.service_id} / {pending.tool}\n\n{pending.summary}", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, self)
+        dialog.setDefaultButton(QMessageBox.StandardButton.No)
+        dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        dialog.finished.connect(lambda result: self._resolve_approval(result == QMessageBox.StandardButton.Yes.value))
+        self._approval_dialog = dialog
+        dialog.open()
+
+    def _resolve_approval(self, approved: bool) -> None:
+        if self._chat_worker is not None:
+            self._chat_worker.decide(approved)
+        self._approval_dialog = None
 
     def _remove_thinking_placeholder(self, message: str) -> None:
         if len(self.view_model.messages) < 2:
@@ -777,16 +753,8 @@ class MainWindow(QMainWindow):
         return [
             "1. 等待输入",
             "2. 进入执行阶段",
-            "3. 点击完整记忆可查看上下文",
+            "3. 记忆图将在保存后自动更新",
         ]
-
-    def _open_memory_dialog(self) -> None:
-        if self.memory_dialog is None:
-            self.memory_dialog = MemoryDialog(self.view_model, self)
-        self.memory_dialog.refresh()
-        self.memory_dialog.show()
-        self.memory_dialog.raise_()
-        self.memory_dialog.activateWindow()
 
     def _open_settings_dialog(self) -> None:
         if self.settings_dialog is None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uvicorn
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -10,12 +11,20 @@ from config import load_settings
 from app_logging import configure_logging
 
 
-def create_app() -> FastAPI:
+def create_app(session_store: SessionStore | None = None) -> FastAPI:
     settings = load_settings()
+    active_store = session_store or SessionStore()
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        yield
+        await active_store.close()
+
     app = FastAPI(
         title=settings.app_name,
         version="0.1.0",
         description="API for the Copy_Myself visual personal-butler workbench.",
+        lifespan=lifespan,
     )
     app.add_middleware(
         CORSMiddleware,
@@ -24,7 +33,8 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    app.include_router(create_router(SessionStore()), prefix="/api")
+    app.include_router(create_router(active_store), prefix="/api")
+
     return app
 
 

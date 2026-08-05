@@ -5,12 +5,17 @@ from uuid import uuid4
 
 from agent.dependencies import create_default_memory_store
 from memory.base import MemoryStore
+from agent.service import ChatService
 
 
 @dataclass
 class WorkbenchSession:
     session_id: str
     memory: MemoryStore = field(default_factory=create_default_memory_store)
+    service: ChatService = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.service = ChatService(memory=self.memory)
 
 
 class SessionStore:
@@ -22,3 +27,7 @@ class SessionStore:
         if key not in self._sessions:
             self._sessions[key] = WorkbenchSession(session_id=key)
         return self._sessions[key]
+
+    async def close(self) -> None:
+        for session in self._sessions.values():
+            await session.service.runner.close()

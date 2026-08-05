@@ -17,6 +17,13 @@ class ChatResponse(BaseModel):
     tool_result: dict[str, Any] | None = None
     memory_context: list[str] = []
     session_id: str | None = None
+    status: str = "completed"
+    pending_approval: dict[str, Any] | None = None
+
+
+class ApprovalRequest(BaseModel):
+    session_id: str
+    approved: bool
 
 
 class StatusResponse(BaseModel):
