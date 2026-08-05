@@ -1,5 +1,40 @@
+# Repository allowlist
+/*
+
+# Required project metadata and entry points
+!/.editorconfig
+!/.env.example
+!/.gitattributes
+!/.gitignore
+!/AGENTS.md
+!/CONTRIBUTING.md
+!/README.md
+!/pyproject.toml
+!/app_logging.py
+!/cli.py
+!/config.py
+
+# Application modules
+!/agent/
+!/agent/**
+!/api/
+!/api/**
+!/builtin_mcp/
+!/builtin_mcp/**
+!/domain/
+!/domain/**
+!/gui/
+!/gui/**
+!/llm/
+!/llm/**
+!/memory/
+!/memory/**
+!/mcp_gateway/
+!/mcp_gateway/**
+
 # Python caches and build outputs
 __pycache__/
+**/__pycache__/
 *.py[cod]
 *.pyo
 *.pyd
@@ -19,10 +54,21 @@ dist/
 .venv/
 venv/
 env/
+keys
 
-# Runtime memory data
-/memoryGraphData/
-/gui/memoryGraphData/
+# Runtime data
+memoryGraphData/
+**/memoryGraphData/
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+*.db
+*.db-shm
+*.db-wal
+
+# Non-shipping workspaces
+docs/
+tests/
 
 # IDE and OS state
 .idea/
@@ -36,4 +82,3 @@ frontend/dist/
 frontend/build/
 web/dist/
 web/build/
-/tests/

@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from tools.base import ToolResult
+from builtin_mcp.tools.base import ToolResult
 
 
 LOCATION_TIMEZONES = {

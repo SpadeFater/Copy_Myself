@@ -19,6 +19,13 @@ PALETTE = {
     "text": "#26313B",
     "text_muted": "#7D8791",
     "border": "#DCE5E5",
+    "graph_background": "#0D1214",
+    "graph_surface": "#151C1F",
+    "graph_edge": "#536467",
+    "graph_node": "#A0B4B0",
+    "graph_node_selected": "#62C9BB",
+    "graph_text": "#E7EFEE",
+    "graph_text_muted": "#82918F",
     "gradient": (
         "qlineargradient(x1:0, y1:0, x2:1, y2:1, "
         "stop:0 #F8FBFA, stop:0.52 #F4F6FF, stop:1 #EEF8F5)"
@@ -29,7 +36,9 @@ SPACING = {"xs": 4, "sm": 8, "md": 12, "lg": 16, "xl": 24}
 
 
 WORKBENCH_QSS = f"""
-#WorkbenchRoot, QDialog#MemoryDialog, QDialog#SettingsDialog, QDialog#ExecutionGraphDialog {{
+/* Hallmark · macrostructure: Workbench · tone: technical · anchor hue: teal */
+/* Hallmark · pre-emit critique: P5 H5 E4 S5 R5 V4 */
+#WorkbenchRoot, QDialog#SettingsDialog, QDialog#ExecutionGraphDialog {{
     background: {PALETTE['gradient']};
     color: {PALETTE['text']};
     font-family: "Open Sans", "Segoe UI", "Microsoft YaHei";
@@ -95,6 +104,44 @@ WORKBENCH_QSS = f"""
     font-weight: 700;
 }}
 #CenterPanel {{ background: transparent; }}
+#MemoryGraphPanel {{
+    background: {PALETTE['graph_surface']};
+    border: none;
+    border-right: 1px solid {PALETTE['graph_edge']};
+}}
+#MemoryGraphSurface, #MemoryGraphView {{
+    background: {PALETTE['graph_background']};
+    border: none;
+}}
+#MemoryGraphTitle {{
+    background: {PALETTE['graph_background']};
+    border: none;
+    border-bottom: 1px solid {PALETTE['graph_edge']};
+    color: {PALETTE['graph_text']};
+    font-size: 14px;
+    font-weight: 700;
+    padding: {SPACING['md']}px {SPACING['lg']}px;
+}}
+#MemoryDetailPanel, #MemoryDetailContent, #MemoryDetailScroll {{
+    background: {PALETTE['graph_surface']};
+    border: none;
+}}
+#MemoryPanelSectionTitle {{
+    color: {PALETTE['graph_node_selected']};
+    font-size: 11px;
+    font-weight: 700;
+}}
+#MemoryDetailTitle {{
+    color: {PALETTE['graph_text']};
+    font-size: 15px;
+    font-weight: 700;
+}}
+#MemoryDetailSummary, #MemoryDetailMeta {{ color: {PALETTE['graph_text_muted']}; }}
+#MemoryDetailRelations {{ color: {PALETTE['graph_text']}; }}
+#MemoryPanelSplitter::handle {{
+    background: {PALETTE['graph_edge']};
+    height: 1px;
+}}
 #HeaderBand, #StageBand, #Composer, #SettingsStatus, #SettingsSection {{
     background: {PALETTE['surface']};
     border: 1px solid {PALETTE['border']};
