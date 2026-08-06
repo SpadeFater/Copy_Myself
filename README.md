@@ -14,6 +14,12 @@ Copy_Myself is a LangGraph-based personal butler agent project. The current stag
 python -m pip install -e .[dev]
 ```
 
+For Office/WPS support:
+
+```powershell
+python -m pip install -e .[dev,office]
+```
+
 ## Run
 
 ```powershell

@@ -47,6 +47,9 @@ class GatewayRuntime:
         if item.downstream_name == "filesystem" and item.origin == "builtin":
             action = arguments.get("action")
             metadata = {"_meta": {"copy_myself": {"risk": "read_only" if action in {"list", "stat", "read", "search"} else "side_effect"}}}
+        if item.downstream_name == "office" and item.origin == "builtin":
+            action = arguments.get("action")
+            metadata = {"_meta": {"copy_myself": {"risk": "read_only" if action in {"list_apps", "word_read_text", "excel_list_sheets", "excel_read_range", "powerpoint_list_slides", "powerpoint_read_text"} else "side_effect"}}}
         if self.policy.requires_approval(item.origin, metadata):
             pending = self.approvals.create(session_id, item.canonical_name, arguments)
             self.audit.record(session_id, item.service_id, item.canonical_name, arguments, "pending", "approval_required", approval_required=True, approval_id=pending.approval_id)

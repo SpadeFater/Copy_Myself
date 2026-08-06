@@ -8,6 +8,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
 from builtin_mcp.tools.filesystem import FileSystemTool
+from builtin_mcp.tools.office import OfficeTool
 from builtin_mcp.tools.time import TimeTool
 
 
@@ -52,6 +53,28 @@ def filesystem(
     """Safely read or mutate files inside configured roots."""
     arguments = {key: value for key, value in locals().items() if value is not None}
     result = FileSystemTool(_roots()).run(arguments)
+    if not result.ok:
+        raise ValueError(result.error)
+    return result.data
+
+
+@server.tool(name="office", meta={"copy_myself": {"risk_by_argument": {"action": {"list_apps": "read_only", "word_read_text": "read_only", "excel_list_sheets": "read_only", "excel_read_range": "read_only", "powerpoint_list_slides": "read_only", "powerpoint_read_text": "read_only"}}, "default_risk": "side_effect"}})
+def office(
+    action: str,
+    app: str | None = None,
+    path: str | None = None,
+    destination: str | None = None,
+    sheet: str | None = None,
+    range: str | None = None,
+    values: list[list[Any]] | None = None,
+    text: str | None = None,
+    replacement: str | None = None,
+    expected_hash: str | None = None,
+    visible: bool = False,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    arguments = {key: value for key, value in locals().items() if value is not None}
+    result = OfficeTool(_roots()).run(arguments)
     if not result.ok:
         raise ValueError(result.error)
     return result.data
