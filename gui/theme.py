@@ -260,6 +260,24 @@ WORKBENCH_QSS = f"""
 #ComposerInput:focus, QLineEdit#SettingsInput:focus, QComboBox#SettingsCombo:focus {{
     border-color: {PALETTE['primary']};
 }}
+#ComposerModelSelector {{
+    background: #FFFFFF;
+    border: 1px solid #D8E0E4;
+    border-radius: 12px;
+    color: {PALETTE['text']};
+    padding: 5px 10px;
+}}
+#ComposerModelSelector:focus {{
+    border-color: {PALETTE['primary']};
+}}
+#ComposerGhostButton {{
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 12px;
+    color: {PALETTE['text_muted']};
+    font-size: 18px;
+    font-weight: 600;
+}}
 QTabWidget#SettingsTabs::pane {{
     background: {PALETTE['surface']};
     border: 1px solid {PALETTE['border']};

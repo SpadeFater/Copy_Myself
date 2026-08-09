@@ -78,6 +78,18 @@ def _coerce_string_sequence(values: object) -> tuple[str, ...]:
     return ()
 
 
+def _coerce_unique_strings(values: object) -> tuple[str, ...]:
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for value in _coerce_string_sequence(values):
+        text = _clean_text(value)
+        if text is None or text in seen:
+            continue
+        cleaned.append(text)
+        seen.add(text)
+    return tuple(cleaned)
+
+
 def _coerce_string_mapping(values: object) -> dict[str, str]:
     if values is None or not isinstance(values, Mapping):
         return {}
@@ -113,6 +125,7 @@ class ModelProviderSettings:
     api_key: str = ""
     provider: str = "openai-compatible"
     headers: dict[str, str] = field(default_factory=dict)
+    available_models: tuple[str, ...] = ()
     enabled: bool = True
 
     def __post_init__(self) -> None:
@@ -132,6 +145,7 @@ class ModelProviderSettings:
         object.__setattr__(self, "api_key", _clean_text(self.api_key) or "")
         object.__setattr__(self, "provider", _clean_text(self.provider) or "openai-compatible")
         object.__setattr__(self, "headers", _coerce_string_mapping(self.headers))
+        object.__setattr__(self, "available_models", _coerce_unique_strings(self.available_models))
         object.__setattr__(self, "enabled", bool(self.enabled))
 
     @property
@@ -146,6 +160,7 @@ class ModelProviderSettings:
             "api_key": self.api_key,
             "provider": self.provider,
             "headers": dict(self.headers),
+            "available_models": list(self.available_models),
             "enabled": self.enabled,
         }
 
@@ -158,6 +173,7 @@ class ModelProviderSettings:
             api_key=data.get("api_key", ""),
             provider=data.get("provider", "openai-compatible"),
             headers=_coerce_string_mapping(data.get("headers")),
+            available_models=_coerce_unique_strings(data.get("available_models")),
             enabled=bool(data.get("enabled", True)),
         )
 
@@ -304,6 +320,7 @@ def import_model_provider_setting(
     api_key: str = "",
     provider: str = "openai-compatible",
     headers: Mapping[str, str] | None = None,
+    available_models: Iterable[str] = (),
     enabled: bool = True,
 ) -> ModelProviderSettings:
     return import_model_provider_settings(
@@ -314,9 +331,63 @@ def import_model_provider_setting(
             api_key=api_key,
             provider=provider,
             headers=dict(headers or {}),
+            available_models=tuple(available_models),
             enabled=enabled,
         )
     )
+
+
+def delete_model_provider_setting(
+    provider_name: str,
+    path: str | Path | None = None,
+) -> tuple[ModelProviderSettings, ...]:
+    clean_provider_name = _clean_text(provider_name)
+    if clean_provider_name is None:
+        raise ValueError("Model provider name is required.")
+
+    store_path = Path(path) if path is not None else default_model_settings_path()
+    providers = [
+        provider
+        for provider in list_model_provider_settings(store_path)
+        if provider.name != clean_provider_name
+    ]
+    return save_model_provider_settings(providers, store_path)
+
+
+def select_model_provider_model(
+    provider_name: str,
+    model_name: str,
+    path: str | Path | None = None,
+) -> ModelProviderSettings:
+    clean_provider_name = _clean_text(provider_name)
+    clean_model_name = _clean_text(model_name)
+    if clean_provider_name is None:
+        raise ValueError("Model provider name is required.")
+    if clean_model_name is None:
+        raise ValueError("Model name is required.")
+
+    store_path = Path(path) if path is not None else default_model_settings_path()
+    providers = list(list_model_provider_settings(store_path))
+    selected: ModelProviderSettings | None = None
+    remaining: list[ModelProviderSettings] = []
+    for provider in providers:
+        if provider.name == clean_provider_name:
+            selected = ModelProviderSettings(
+                name=provider.name,
+                base_url=provider.base_url,
+                model_name=clean_model_name,
+                api_key=provider.api_key,
+                provider=provider.provider,
+                headers=provider.headers,
+                available_models=provider.available_models,
+                enabled=provider.enabled,
+            )
+        else:
+            remaining.append(provider)
+    if selected is None:
+        raise ValueError(f"Unknown model provider: {clean_provider_name}")
+    save_model_provider_settings([selected, *remaining], store_path)
+    return selected
 
 
 def load_mcp_service_settings(path: str | Path | None = None) -> tuple[McpServiceSettings, ...]:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from urllib.parse import urlparse
 from uuid import uuid4
 
 from PyQt6.QtCore import QThread, QTimer, Qt, pyqtSignal
@@ -25,12 +26,16 @@ from PyQt6.QtWidgets import (
 )
 
 from config import (
+    ModelProviderSettings,
+    delete_model_provider_setting,
     import_mcp_service_setting,
     import_model_provider_setting,
     list_mcp_service_settings,
     list_model_provider_settings,
     load_settings,
+    select_model_provider_model,
 )
+from llm.openai_compatible import fetch_available_models
 from gui.view_model import ChatMessage, RunSummary, WorkbenchViewModel
 from gui.execution_graph import ExecutionGraphDialog
 from gui.memory_graph import MemoryGraphPanel
@@ -95,7 +100,11 @@ class SettingsDialog(QDialog):
         self.model_id_input = QLineEdit()
         self.model_api_key_input = QLineEdit()
         self.model_provider_input = QLineEdit("openai-compatible")
-        self.import_model_button = QPushButton("导入模型")
+        self.available_models_combo = QComboBox()
+        self.probe_models_button = QPushButton("探测模型")
+        self.manual_model_button = QPushButton("手动填写模型名")
+        self.import_model_button = QPushButton("保存模型")
+        self.delete_model_button = QPushButton("删除模型")
         self.model_providers = QListWidget()
         self.mcp_name_input = QLineEdit()
         self.mcp_url_input = QLineEdit()
@@ -122,7 +131,11 @@ class SettingsDialog(QDialog):
         ):
             field.setObjectName("SettingsInput")
         self.mcp_transport_input.setObjectName("SettingsCombo")
+        self.available_models_combo.setObjectName("SettingsCombo")
+        self.probe_models_button.setObjectName("DialogSecondaryButton")
+        self.manual_model_button.setObjectName("DialogSecondaryButton")
         self.import_model_button.setObjectName("DialogPrimaryButton")
+        self.delete_model_button.setObjectName("DialogSecondaryButton")
         self.import_mcp_button.setObjectName("DialogPrimaryButton")
 
         self.setWindowTitle("设置")
@@ -131,7 +144,11 @@ class SettingsDialog(QDialog):
 
         self._build_ui()
         self.refresh()
+        self.probe_models_button.clicked.connect(self._probe_models)
+        self.manual_model_button.clicked.connect(lambda checked=False: self._show_manual_model_input(True))
+        self.available_models_combo.currentTextChanged.connect(self._apply_probed_model)
         self.import_model_button.clicked.connect(self._import_model)
+        self.delete_model_button.clicked.connect(self._delete_model)
         self.import_mcp_button.clicked.connect(self._import_mcp_service)
 
     def _build_ui(self) -> None:
@@ -180,13 +197,21 @@ class SettingsDialog(QDialog):
         self.model_provider_input.setPlaceholderText("提供方类型，例如 openai-compatible")
         model_form_layout.addRow("名称", self.model_name_input)
         model_form_layout.addRow("URL", self.model_url_input)
-        model_form_layout.addRow("模型", self.model_id_input)
         model_form_layout.addRow("API Key", self.model_api_key_input)
         model_form_layout.addRow("提供方", self.model_provider_input)
+        model_form_layout.addRow("可用模型", self.available_models_combo)
+        model_form_layout.addRow("模型", self.model_id_input)
+        self._set_form_field_hidden(model_form_layout, self.model_name_input, True)
+        self._set_form_field_hidden(model_form_layout, self.model_provider_input, True)
+        self._set_form_field_hidden(model_form_layout, self.available_models_combo, True)
+        self._set_form_field_hidden(model_form_layout, self.model_id_input, True)
         model_layout.addWidget(model_form)
+        model_layout.addWidget(self.probe_models_button)
+        model_layout.addWidget(self.manual_model_button)
         model_layout.addWidget(self.import_model_button)
-        self.model_providers.setMaximumHeight(88)
-        model_layout.addWidget(self.model_providers)
+        model_layout.addWidget(self.delete_model_button)
+        self.model_providers.setMinimumHeight(140)
+        model_layout.addWidget(self.model_providers, stretch=1)
 
         mcp_tab = QWidget()
         mcp_layout = QVBoxLayout(mcp_tab)
@@ -224,21 +249,11 @@ class SettingsDialog(QDialog):
         footer.addWidget(close_button)
         root.addLayout(footer)
 
-    def _section_frame(self, title: str, description: str) -> QFrame:
-        frame = QFrame()
-        frame.setObjectName("SettingsSection")
-        layout = QVBoxLayout(frame)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(8)
-
-        label = QLabel(title)
-        label.setObjectName("SectionTitle")
-        text = QLabel(description)
-        text.setObjectName("SectionHint")
-        text.setWordWrap(True)
-        layout.addWidget(label)
-        layout.addWidget(text)
-        return frame
+    def _set_form_field_hidden(self, form: QFormLayout, field: QWidget, hidden: bool) -> None:
+        label = form.labelForField(field)
+        if label is not None:
+            label.setHidden(hidden)
+        field.setHidden(hidden)
 
     def refresh(self) -> None:
         settings = load_settings()
@@ -256,10 +271,15 @@ class SettingsDialog(QDialog):
         self.model_providers.clear()
         providers = list_model_provider_settings()
         if not providers:
-            self.model_providers.addItem("暂无已导入模型")
+            item = QListWidgetItem("暂无已导入模型")
+            item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            self.model_providers.addItem(item)
             return
         for provider in providers:
-            self.model_providers.addItem(f"{provider.name} · {provider.model_name} · {provider.base_url}")
+            suffix = f" · {len(provider.available_models)} 个可用模型" if provider.available_models else ""
+            item = QListWidgetItem(f"{provider.name} · {provider.model_name} · {provider.base_url}{suffix}")
+            item.setData(Qt.ItemDataRole.UserRole, provider.name)
+            self.model_providers.addItem(item)
 
     def _refresh_mcp_services(self) -> None:
         self.mcp_services.clear()
@@ -271,17 +291,20 @@ class SettingsDialog(QDialog):
             self.mcp_services.addItem(f"{service.name} · {service.transport} · {service.endpoint}")
 
     def _import_model(self) -> None:
-        name = self.model_name_input.text().strip()
         base_url = self.model_url_input.text().strip()
         model_name = self.model_id_input.text().strip()
-        if not name or not base_url or not model_name:
+        if not base_url or not model_name:
             return
+        available_models = self._available_model_items()
+        if model_name not in available_models:
+            available_models = (*available_models, model_name)
         import_model_provider_setting(
-            name=name,
+            name=self.model_name_input.text().strip() or self._default_model_provider_name(base_url, model_name),
             base_url=base_url,
             model_name=model_name,
             api_key=self.model_api_key_input.text().strip(),
             provider=self.model_provider_input.text().strip() or "openai-compatible",
+            available_models=available_models,
         )
         for field in (
             self.model_name_input,
@@ -290,7 +313,88 @@ class SettingsDialog(QDialog):
             self.model_api_key_input,
         ):
             field.clear()
+        self.available_models_combo.clear()
+        self._show_manual_model_input(False)
+        self._show_available_models(False)
         self.refresh()
+        if isinstance(self.parent(), MainWindow):
+            self.parent()._refresh_model_selector()
+
+    def _delete_model(self) -> None:
+        item = self.model_providers.currentItem()
+        if item is None:
+            return
+        provider_name = item.data(Qt.ItemDataRole.UserRole)
+        if not provider_name:
+            return
+        result = QMessageBox.question(
+            self,
+            "删除模型",
+            f"确定删除模型配置“{provider_name}”吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if result != QMessageBox.StandardButton.Yes:
+            return
+        delete_model_provider_setting(str(provider_name))
+        self.refresh()
+        parent = self.parent()
+        if isinstance(parent, MainWindow):
+            parent._refresh_model_selector()
+
+    def _probe_models(self) -> None:
+        name = self.model_name_input.text().strip() or "probe"
+        base_url = self.model_url_input.text().strip()
+        if not base_url:
+            QMessageBox.warning(self, "探测失败", "请先填写模型 URL。")
+            return
+        provider = ModelProviderSettings(
+            name=name,
+            base_url=base_url,
+            model_name=self.model_id_input.text().strip() or "probe",
+            api_key=self.model_api_key_input.text().strip(),
+            provider=self.model_provider_input.text().strip() or "openai-compatible",
+        )
+        try:
+            models = fetch_available_models(provider)
+        except Exception as exc:
+            self.available_models_combo.clear()
+            self._show_available_models(False)
+            self._show_manual_model_input(True)
+            QMessageBox.warning(self, "探测失败", str(exc))
+            return
+        self.available_models_combo.clear()
+        self.available_models_combo.addItems(list(models))
+        self._show_available_models(True)
+        self.model_id_input.setText(models[0])
+        self._show_manual_model_input(False)
+
+    def _apply_probed_model(self, model_name: str) -> None:
+        if model_name:
+            self.model_id_input.setText(model_name)
+
+    def _available_model_items(self) -> tuple[str, ...]:
+        models: list[str] = []
+        for index in range(self.available_models_combo.count()):
+            model = self.available_models_combo.itemText(index).strip()
+            if model and model not in models:
+                models.append(model)
+        return tuple(models)
+
+    def _show_available_models(self, visible: bool) -> None:
+        form = self.available_models_combo.parent().layout()
+        if isinstance(form, QFormLayout):
+            self._set_form_field_hidden(form, self.available_models_combo, not visible)
+
+    def _show_manual_model_input(self, visible: bool = True) -> None:
+        form = self.model_id_input.parent().layout()
+        if isinstance(form, QFormLayout):
+            self._set_form_field_hidden(form, self.model_id_input, not visible)
+
+    @staticmethod
+    def _default_model_provider_name(base_url: str, model_name: str) -> str:
+        host = urlparse(base_url).hostname or base_url.split("/")[0] or "model"
+        return f"{host} · {model_name}"
 
     def _import_mcp_service(self) -> None:
         name = self.mcp_name_input.text().strip()
@@ -333,8 +437,10 @@ class MainWindow(QMainWindow):
         self._pending_message: str | None = None
         self._chat_worker: ChatWorker | None = None
         self._approval_dialog: QMessageBox | None = None
+        self._refreshing_model_selector = False
 
         self.chat_list = ChatListWidget()
+        self.model_selector = QComboBox()
         self.input_box = QLineEdit()
         self.send_button = QPushButton("发送")
         self.status_value = QLabel("standby")
@@ -352,6 +458,7 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._connect_events()
+        self._refresh_model_selector()
         self._refresh_messages()
         self._refresh_inspector(None)
 
@@ -450,17 +557,30 @@ class MainWindow(QMainWindow):
 
         composer = QFrame()
         composer.setObjectName("Composer")
-        composer_layout = QHBoxLayout(composer)
+        composer_layout = QVBoxLayout(composer)
         composer_layout.setContentsMargins(10, 10, 10, 10)
-        composer_layout.setSpacing(10)
+        composer_layout.setSpacing(8)
         self.input_box.setPlaceholderText("发送消息给 Copy_Myself")
         self.input_box.setObjectName("ComposerInput")
+        self.model_selector.setObjectName("ComposerModelSelector")
+        self.model_selector.setMinimumWidth(180)
         self.send_button.setObjectName("PrimaryButton")
         self.send_button.setText("")
         self.send_button.setFixedSize(42, 42)
         self.send_button.setIcon(fluent_icon("SEND"))
-        composer_layout.addWidget(self.input_box, stretch=1)
-        composer_layout.addWidget(self.send_button)
+        bottom_row = QHBoxLayout()
+        bottom_row.setContentsMargins(0, 0, 0, 0)
+        bottom_row.setSpacing(8)
+        add_button = QToolButton()
+        add_button.setObjectName("ComposerGhostButton")
+        add_button.setText("+")
+        add_button.setEnabled(False)
+        bottom_row.addWidget(add_button)
+        bottom_row.addStretch()
+        bottom_row.addWidget(self.model_selector)
+        bottom_row.addWidget(self.send_button)
+        composer_layout.addWidget(self.input_box)
+        composer_layout.addLayout(bottom_row)
         layout.addWidget(composer)
 
         return panel
@@ -574,6 +694,7 @@ class MainWindow(QMainWindow):
     def _connect_events(self) -> None:
         self.send_button.clicked.connect(self._send_message)
         self.input_box.returnPressed.connect(self._send_message)
+        self.model_selector.currentIndexChanged.connect(self._select_chat_model)
         self.execution_graph_button.clicked.connect(self._open_execution_graph_dialog)
 
     def _handle_nav_click(self, name: str) -> None:
@@ -581,6 +702,42 @@ class MainWindow(QMainWindow):
             button.setChecked(button_name == name)
         if name == "设置":
             self._open_settings_dialog()
+
+    def _refresh_model_selector(self) -> None:
+        self._refreshing_model_selector = True
+        self.model_selector.clear()
+        providers = [provider for provider in list_model_provider_settings() if provider.enabled]
+        for provider in providers:
+            models = list(provider.available_models or (provider.model_name,))
+            if provider.model_name not in models:
+                models.insert(0, provider.model_name)
+            for model in models:
+                self.model_selector.addItem(model, (provider.name, model))
+        if self.model_selector.count() == 0:
+            settings = load_settings()
+            self.model_selector.addItem(settings.model_name, ("", settings.model_name))
+            self.model_selector.setEnabled(False)
+        else:
+            self.model_selector.setEnabled(True)
+        self._refreshing_model_selector = False
+
+    def _select_chat_model(self) -> None:
+        if self._refreshing_model_selector:
+            return
+        data = self.model_selector.currentData()
+        if not data:
+            return
+        provider_name, model_name = data
+        if not provider_name:
+            return
+        try:
+            select_model_provider_model(provider_name, model_name)
+        except Exception as exc:
+            QMessageBox.warning(self, "模型切换失败", str(exc))
+            self._refresh_model_selector()
+            return
+        if self.settings_dialog is not None:
+            self.settings_dialog.refresh()
 
     def _select_builtin_tools(self) -> None:
         self.status_value.setText("builtin tools")

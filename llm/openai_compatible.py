@@ -10,6 +10,51 @@ from config import ModelProviderSettings
 from llm.base import ChatMessage, ModelClient, ToolDecision
 
 
+def _model_paths(base_url: str) -> tuple[str, str]:
+    root = base_url.rstrip("/")
+    if root.endswith("/v1"):
+        return (f"{root}/models", f"{root[:-3]}/models")
+    return (f"{root}/v1/models", f"{root}/models")
+
+
+def _extract_model_names(payload: Any) -> tuple[str, ...]:
+    if not isinstance(payload, dict):
+        return ()
+    raw_models = payload.get("data", payload.get("models", ()))
+    if not isinstance(raw_models, list):
+        return ()
+    models: list[str] = []
+    seen: set[str] = set()
+    for item in raw_models:
+        if isinstance(item, str):
+            candidate = item.strip()
+        elif isinstance(item, dict):
+            raw_name = item.get("id", item.get("name", ""))
+            candidate = raw_name.strip() if isinstance(raw_name, str) else ""
+        else:
+            candidate = ""
+        if candidate and candidate not in seen:
+            models.append(candidate)
+            seen.add(candidate)
+    return tuple(models)
+
+
+def fetch_available_models(provider: ModelProviderSettings, timeout: float = 30.0) -> tuple[str, ...]:
+    last_error: Exception | None = None
+    for url in _model_paths(provider.base_url):
+        request = Request(url, headers=OpenAICompatibleClient(provider)._headers(), method="GET")
+        try:
+            with urlopen(request, timeout=timeout) as response:
+                body = response.read().decode("utf-8")
+            models = _extract_model_names(json.loads(body))
+            if not models:
+                raise RuntimeError("Model list response did not contain usable model names.")
+            return models
+        except Exception as exc:
+            last_error = exc
+    raise RuntimeError(f"Unable to fetch model list: {last_error}") from last_error
+
+
 @dataclass
 class OpenAICompatibleClient(ModelClient):
     provider: ModelProviderSettings
