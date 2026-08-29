@@ -138,3 +138,19 @@ transport, a command plus argument array or endpoint, optional headers/env,
 and a finite timeout. The reserved `builtin` ID cannot be configured by users.
 The gateway isolates an offline external service so other tools and plain chat
 remain available.
+
+## Generated MCP Tools
+
+When the model cannot satisfy a request with the current catalog, it may create
+one generated MCP tool after approval. Generated tools are stored under
+`builtin_mcp/tools/generated/<tool_id>/<version>/` with a manifest, source,
+tests, and dependency lock data. Enabled versions are discovered by the
+gateway refresh path and run as independent Docker-backed stdio services.
+
+Generated tools must declare capabilities (`network`, filesystem access,
+processes, or secrets). Docker runs use a read-only root filesystem, no Linux
+capabilities, a non-root user, process/memory/CPU limits, and no network unless
+the manifest explicitly requests it. PyPI and npm dependencies are installed
+inside the image; npm install scripts remain disabled unless explicitly
+approved. Failed validation or image builds leave the version disabled and do
+not replace an existing active version.

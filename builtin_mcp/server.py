@@ -10,6 +10,7 @@ from mcp.types import ToolAnnotations
 from builtin_mcp.tools.filesystem import FileSystemTool
 from builtin_mcp.tools.office import OfficeTool
 from builtin_mcp.tools.time import TimeTool
+from builtin_mcp.tools.generated.manager import GeneratedToolManager
 
 
 def _roots() -> list[Path]:
@@ -78,6 +79,49 @@ def office(
     if not result.ok:
         raise ValueError(result.error)
     return result.data
+
+
+@server.tool(name="create_tool", meta={"copy_myself": {"risk": "side_effect"}})
+def create_tool(
+    tool_id: str,
+    name: str,
+    description: str,
+    source: str,
+    runtime: str = "python",
+    version: str = "1.0.0",
+    entrypoint: str = "server.py",
+    dependencies: list[str] | None = None,
+    capabilities: list[str] | None = None,
+    secrets: list[str] | None = None,
+    filesystem_roots: list[str] | None = None,
+    next_call: dict[str, Any] | None = None,
+    allow_install_scripts: bool = False,
+    timeout_seconds: float = 30.0,
+) -> dict[str, Any]:
+    """Create, validate, install, and persist one generated MCP tool.
+
+    The source must be a complete stdio MCP server for the selected runtime.
+    """
+    result = GeneratedToolManager().create(
+        {
+            "tool_id": tool_id,
+            "name": name,
+            "description": description,
+            "source": source,
+            "runtime": runtime,
+            "version": version,
+            "entrypoint": entrypoint,
+            "dependencies": dependencies or [],
+            "capabilities": capabilities or [],
+            "secrets": secrets or [],
+            "filesystem_roots": filesystem_roots or [],
+            "next_call": next_call,
+            "allow_install_scripts": allow_install_scripts,
+            "timeout_seconds": timeout_seconds,
+        },
+        install=True,
+    )
+    return result
 
 
 def main() -> None:

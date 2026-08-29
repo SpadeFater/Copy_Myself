@@ -202,6 +202,7 @@ class McpServiceSettings:
     env: dict[str, str] = field(default_factory=dict)
     enabled: bool = True
     timeout_seconds: float = 30.0
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         name = _clean_text(self.name)
@@ -224,6 +225,7 @@ class McpServiceSettings:
         object.__setattr__(self, "env", _coerce_string_mapping(self.env))
         object.__setattr__(self, "enabled", bool(self.enabled))
         object.__setattr__(self, "timeout_seconds", float(self.timeout_seconds))
+        object.__setattr__(self, "metadata", dict(self.metadata) if isinstance(self.metadata, Mapping) else {})
 
     def to_record(self) -> dict[str, object]:
         return {
@@ -237,6 +239,7 @@ class McpServiceSettings:
             "env": dict(self.env),
             "enabled": self.enabled,
             "timeout_seconds": self.timeout_seconds,
+            "metadata": dict(self.metadata),
         }
 
     @classmethod
@@ -254,6 +257,7 @@ class McpServiceSettings:
             env=_coerce_string_mapping(data.get("env")),
             enabled=bool(data.get("enabled", True)),
             timeout_seconds=float(data.get("timeout_seconds", 30.0)),
+            metadata=data.get("metadata", {}),
         )
 
 

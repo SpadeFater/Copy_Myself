@@ -10,44 +10,42 @@ class StyleTarget(Protocol):
 
 
 PALETTE = {
-    "window": "#F4F8F7",
+    "window": "#F8F7FC",
     "surface": "#FFFFFF",
-    "surface_raised": "#F5F7FF",
-    "primary": "#637BC4",
-    "primary_hover": "#526BB5",
+    "surface_raised": "#F3F0FC",
+    "primary": "#7565C8",
+    "primary_hover": "#6656B5",
+    "primary_soft": "#EEEAFB",
+    "focus": "#9181E5",
     "attention": "#D58D6C",
-    "text": "#26313B",
-    "text_muted": "#7D8791",
-    "border": "#DCE5E5",
-    "graph_background": "#0D1214",
-    "graph_surface": "#151C1F",
-    "graph_edge": "#536467",
-    "graph_node": "#A0B4B0",
-    "graph_node_selected": "#62C9BB",
-    "graph_text": "#E7EFEE",
-    "graph_text_muted": "#82918F",
-    "gradient": (
-        "qlineargradient(x1:0, y1:0, x2:1, y2:1, "
-        "stop:0 #F8FBFA, stop:0.52 #F4F6FF, stop:1 #EEF8F5)"
-    ),
+    "text": "#29263D",
+    "text_muted": "#716D84",
+    "border": "#DFDBE9",
+    "graph_background": "#29253F",
+    "graph_surface": "#312D4B",
+    "graph_edge": "#5B5577",
+    "graph_node": "#B5B0C7",
+    "graph_node_hover": "#B8ADFA",
+    "graph_node_selected": "#9181E5",
+    "graph_text": "#F3F1FB",
+    "graph_text_muted": "#B7B0D2",
+    "graph_border": "#4D4868",
 }
 
 SPACING = {"xs": 4, "sm": 8, "md": 12, "lg": 16, "xl": 24}
 
 
 WORKBENCH_QSS = f"""
-/* Hallmark · macrostructure: Workbench · tone: technical · anchor hue: teal */
-/* Hallmark · pre-emit critique: P5 H5 E4 S5 R5 V4 */
 #WorkbenchRoot, QDialog#SettingsDialog, QDialog#ExecutionGraphDialog {{
-    background: {PALETTE['gradient']};
+    background: {PALETTE['window']};
     color: {PALETTE['text']};
     font-family: "Open Sans", "Segoe UI", "Microsoft YaHei";
     font-size: 13px;
 }}
 #Sidebar {{
-    background: #0F1214;
+    background: {PALETTE['graph_background']};
     border: none;
-    border-right: 1px solid {PALETTE['border']};
+    border-right: 1px solid {PALETTE['graph_border']};
 }}
 #MinimalHeader {{
     background: transparent;
@@ -61,14 +59,14 @@ WORKBENCH_QSS = f"""
     padding: 8px;
 }}
 #NavButton:hover {{
-    background: #EEF2FF;
-    border-color: #CBD6F4;
-    color: #4E66AE;
+    background: {PALETTE['primary_soft']};
+    border-color: {PALETTE['border']};
+    color: {PALETTE['primary']};
 }}
 #BrandMark {{
     background: {PALETTE['primary']};
     color: #FFFFFF;
-    border-radius: 6px;
+    border-radius: 8px;
     font-size: 13px;
     font-weight: 800;
 }}
@@ -89,25 +87,25 @@ WORKBENCH_QSS = f"""
     background: transparent;
     border: 1px solid transparent;
     border-radius: 6px;
-    color: #BBC3C1;
+    color: {PALETTE['graph_text_muted']};
     padding: 9px 12px;
     text-align: left;
 }}
 #SidebarButton:hover {{
-    background: {PALETTE['surface_raised']};
-    color: {PALETTE['text']};
+    background: {PALETTE['graph_surface']};
+    color: {PALETTE['graph_text']};
 }}
 #SidebarButton:checked {{
-    background: #18312D;
-    border-color: #28564F;
-    color: #79E1D3;
+    background: #403B61;
+    border-color: {PALETTE['graph_border']};
+    color: {PALETTE['graph_text']};
     font-weight: 700;
 }}
 #CenterPanel {{ background: transparent; }}
 #MemoryGraphPanel {{
     background: {PALETTE['graph_surface']};
     border: none;
-    border-right: 1px solid {PALETTE['graph_edge']};
+    border-right: 1px solid {PALETTE['graph_border']};
 }}
 #MemoryGraphSurface, #MemoryGraphView {{
     background: {PALETTE['graph_background']};
@@ -116,7 +114,7 @@ WORKBENCH_QSS = f"""
 #MemoryGraphTitle {{
     background: {PALETTE['graph_background']};
     border: none;
-    border-bottom: 1px solid {PALETTE['graph_edge']};
+    border-bottom: 1px solid {PALETTE['graph_border']};
     color: {PALETTE['graph_text']};
     font-size: 14px;
     font-weight: 700;
@@ -136,45 +134,59 @@ WORKBENCH_QSS = f"""
     font-size: 15px;
     font-weight: 700;
 }}
-#MemoryDetailSummary, #MemoryDetailMeta {{ color: {PALETTE['graph_text_muted']}; }}
+#MemoryDetailSummary {{ color: {PALETTE['graph_text']}; }}
+#MemoryDetailMeta {{ color: {PALETTE['graph_text_muted']}; }}
 #MemoryDetailRelations {{ color: {PALETTE['graph_text']}; }}
 #MemoryPanelSplitter::handle {{
     background: {PALETTE['graph_edge']};
     height: 1px;
 }}
-#HeaderBand, #StageBand, #Composer, #SettingsStatus, #SettingsSection {{
+#MemoryDetailPanel QPushButton#DialogSecondaryButton {{
+    background: #403B61;
+    border-color: {PALETTE['graph_edge']};
+    color: {PALETTE['graph_text']};
+}}
+#MemoryDetailPanel QPushButton#DialogSecondaryButton:hover {{
+    background: {PALETTE['graph_border']};
+    border-color: {PALETTE['graph_node_hover']};
+}}
+#MemoryDetailPanel QPushButton#DialogSecondaryButton:disabled {{
+    background: #393450;
+    border-color: {PALETTE['graph_border']};
+    color: {PALETTE['graph_text_muted']};
+}}
+#HeaderBand, #StageBand, #SettingsStatus, #SettingsSection {{
     background: {PALETTE['surface']};
-    border: 1px solid {PALETTE['border']};
-    border-radius: 8px;
+    border: none;
 }}
 #Composer {{
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #FFFFFF, stop:1 #F7F9FF);
-    border: 1px solid #D6DFE8;
+    background: {PALETTE['surface']};
+    border: 1px solid {PALETTE['border']};
     border-radius: 14px;
 }}
 #Title {{ color: {PALETTE['text']}; font-size: 23px; font-weight: 700; }}
 #PanelTitle, #SectionTitle, #DialogTitle {{
-    color: #34424E;
+    color: {PALETTE['text']};
     font-size: 12px;
     font-weight: 700;
 }}
 #DialogTitle {{ font-size: 20px; }}
 #StatusValue, #IntentValue, #CurrentModelValue {{
-    color: #5A71B7;
+    color: {PALETTE['primary']};
     font-size: 14px;
     font-weight: 700;
 }}
 #StatusDot {{ background: {PALETTE['primary']}; border-radius: 4px; }}
 #ToolChip {{
-    background: #171B1E;
-    border: 1px solid #313938;
-    border-radius: 6px;
-    color: #C9D0CE;
+    background: {PALETTE['surface_raised']};
+    border: 1px solid transparent;
+    border-radius: 8px;
+    color: {PALETTE['text']};
     padding: 7px 11px;
     font-weight: 600;
 }}
-#ToolChip:hover {{ border-color: #4C817A; color: #7BE1D3; }}
-#ToolChip:pressed {{ background: #20312E; }}
+#ToolChip:hover {{ background: {PALETTE['primary_soft']}; border-color: {PALETTE['border']}; color: {PALETTE['primary']}; }}
+#ToolChip:pressed {{ background: {PALETTE['primary_soft']}; }}
 #ChatList, #StageList, #PlanList, #MemoryContextList, #MemoryMessageList, #MemoryDetail,
 #ModelProviderList, #McpServiceList {{
     background: {PALETTE['surface']};
@@ -191,36 +203,36 @@ WORKBENCH_QSS = f"""
     padding: 14px 0;
 }}
 #MemoryDetail {{
-    selection-background-color: #D7E1FF;
+    selection-background-color: {PALETTE['primary_soft']};
 }}
 #ChatList::item, #StageList::item {{ background: transparent; border: none; padding: 3px 0; }}
 #PlanList::item, #MemoryContextList::item, #MemoryMessageList::item,
 #ModelProviderList::item, #McpServiceList::item {{
-    border-bottom: 1px solid #232927;
+    border-bottom: 1px solid {PALETTE['border']};
     padding: 8px 6px;
 }}
 #PlanList::item:selected, #MemoryContextList::item:selected, #MemoryMessageList::item:selected,
 #ModelProviderList::item:selected, #McpServiceList::item:selected {{
-    background: #1B302D;
+    background: {PALETTE['primary_soft']};
     color: {PALETTE['text']};
 }}
-#UserMessage, #AssistantMessage {{ border-radius: 12px; }}
-#UserMessage {{ background: #EEF2FF; border: 1px solid #D9E1FA; }}
-#AssistantMessage {{ background: #FFFFFF; border: 1px solid #E1E8E8; }}
+#UserMessage, #AssistantMessage {{ border-radius: 10px; }}
+#UserMessage {{ background: {PALETTE['primary_soft']}; border: 1px solid #DDD7F5; }}
+#AssistantMessage {{ background: {PALETTE['surface']}; border: 1px solid {PALETTE['border']}; }}
 #MessageText {{ background: transparent; border: none; color: {PALETTE['text']}; }}
 #ExecutionStep {{ background: transparent; border: none; }}
 #StepBadge {{
-    background: #1D3531;
-    border: 1px solid #35655D;
+    background: {PALETTE['primary_soft']};
+    border: 1px solid #D8D1F3;
     border-radius: 10px;
-    color: #7BE1D3;
+    color: {PALETTE['primary']};
     font-size: 10px;
     font-weight: 700;
 }}
-#StepName {{ color: #D7DDDB; font-weight: 600; }}
+#StepName {{ color: {PALETTE['text']}; font-weight: 600; }}
 #StepMeta {{ color: {PALETTE['text_muted']}; font-size: 10px; }}
 #Inspector {{
-    background: #0F1214;
+    background: {PALETTE['surface_raised']};
     border: none;
     border-left: 1px solid {PALETTE['border']};
 }}
@@ -236,44 +248,52 @@ WORKBENCH_QSS = f"""
     background: {PALETTE['primary_hover']};
 }}
 #ExecutionGraphButton:disabled, #PrimaryButton:disabled {{
-    background: #D8DEE4;
-    border-color: #D8DEE4;
-    color: #8C969F;
+    background: #DDD9EA;
+    border-color: #DDD9EA;
+    color: #817B93;
 }}
 #SecondaryButton, QPushButton#DialogSecondaryButton {{
-    background: #F7F9FA;
-    border: 1px solid #D8E0E4;
-    border-radius: 6px;
-    color: #52606B;
+    background: {PALETTE['surface']};
+    border: 1px solid {PALETTE['border']};
+    border-radius: 8px;
+    color: {PALETTE['text']};
     padding: 8px 13px;
     font-weight: 600;
 }}
-#SecondaryButton:hover, QPushButton#DialogSecondaryButton:hover {{ border-color: #AAB9C4; }}
+#SecondaryButton:hover, QPushButton#DialogSecondaryButton:hover {{ background: {PALETTE['surface_raised']}; border-color: {PALETTE['focus']}; }}
 #ComposerInput, QLineEdit#SettingsInput, QComboBox#SettingsCombo {{
     background: #FFFFFF;
-    border: 1px solid #D8E0E4;
-    border-radius: 6px;
+    border: 1px solid {PALETTE['border']};
+    border-radius: 8px;
     color: {PALETTE['text']};
     padding: 9px 11px;
-    selection-background-color: #D7E1FF;
+    selection-background-color: {PALETTE['primary_soft']};
+}}
+#ComposerInput:hover, QLineEdit#SettingsInput:hover, QComboBox#SettingsCombo:hover {{
+    background: #FCFBFE;
+    border-color: #CFC8E4;
 }}
 #ComposerInput:focus, QLineEdit#SettingsInput:focus, QComboBox#SettingsCombo:focus {{
-    border-color: {PALETTE['primary']};
+    border-color: {PALETTE['focus']};
+    outline: 2px solid {PALETTE['focus']};
+    outline-offset: 0;
 }}
 #ComposerModelSelector {{
-    background: #FFFFFF;
-    border: 1px solid #D8E0E4;
-    border-radius: 12px;
+    background: {PALETTE['surface_raised']};
+    border: 1px solid {PALETTE['border']};
+    border-radius: 10px;
     color: {PALETTE['text']};
     padding: 5px 10px;
 }}
 #ComposerModelSelector:focus {{
-    border-color: {PALETTE['primary']};
+    border-color: {PALETTE['focus']};
+    outline: 2px solid {PALETTE['focus']};
+    outline-offset: 0;
 }}
 #ComposerGhostButton {{
     background: transparent;
     border: 1px solid transparent;
-    border-radius: 12px;
+    border-radius: 10px;
     color: {PALETTE['text_muted']};
     font-size: 18px;
     font-weight: 600;
@@ -290,12 +310,12 @@ QTabWidget#SettingsTabs QTabBar::tab {{
     padding: 8px 18px;
 }}
 QTabWidget#SettingsTabs QTabBar::tab:selected {{
-    color: #526BB5;
+    color: {PALETTE['primary']};
     border-bottom: 2px solid {PALETTE['primary']};
 }}
 QScrollBar:vertical {{ background: transparent; width: 8px; margin: 2px; }}
-QScrollBar::handle:vertical {{ background: #C8D4D7; min-height: 28px; border-radius: 4px; }}
-QScrollBar::handle:vertical:hover {{ background: #AABCC2; }}
+QScrollBar::handle:vertical {{ background: #CBC5DD; min-height: 28px; border-radius: 4px; }}
+QScrollBar::handle:vertical:hover {{ background: #AAA2C3; }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
 """
 
@@ -304,7 +324,7 @@ def apply_workbench_theme(target: StyleTarget) -> None:
     try:
         from qfluentwidgets import Theme, setTheme
 
-        setTheme(Theme.DARK)
+        setTheme(Theme.LIGHT)
     except (ImportError, RuntimeError):
         pass
     target.setStyleSheet(WORKBENCH_QSS)

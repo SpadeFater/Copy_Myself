@@ -34,6 +34,10 @@ class ToolCatalog:
         for item in descriptors:
             self.add(item)
 
+    def remove_service(self, service_id: str) -> None:
+        for key in [key for key, item in self._items.items() if item.service_id == service_id]:
+            del self._items[key]
+
     def get_by_model_name(self, name: str) -> ToolDescriptor | None:
         return self._items.get(name)
 
@@ -44,10 +48,12 @@ class ToolCatalog:
         return list(self._items.values())
 
 
-def descriptor(service_id: str, tool: Any, *, origin: str) -> ToolDescriptor:
+def descriptor(service_id: str, tool: Any, *, origin: str, service_metadata: dict[str, Any] | None = None) -> ToolDescriptor:
     name = getattr(tool, "name", "")
     canonical = canonical_tool_name(service_id, name)
     annotations = dict(getattr(tool, "meta", None) or {})
+    if service_metadata:
+        annotations.update(service_metadata)
     if getattr(tool, "annotations", None):
         annotations["annotations"] = tool.annotations.model_dump(exclude_none=True)
     return ToolDescriptor(service_id, name, canonical, model_tool_name(service_id, name), getattr(tool, "description", ""), getattr(tool, "inputSchema", getattr(tool, "parameters", {})), annotations, origin)

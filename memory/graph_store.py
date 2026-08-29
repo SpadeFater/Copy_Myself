@@ -428,6 +428,26 @@ class GraphMemoryStore:
             if edge.from_node == node_id or edge.to_node == node_id
         ]
 
+    def get_related_nodes(self, node_id: str) -> list[MemoryNode]:
+        rows = self._connection.execute(
+            """
+            SELECT memory_nodes.*
+            FROM memory_nodes
+            JOIN (
+                SELECT to_node AS node_id
+                FROM memory_edges
+                WHERE from_node = ?
+                UNION
+                SELECT from_node AS node_id
+                FROM memory_edges
+                WHERE to_node = ?
+            ) AS related_nodes ON related_nodes.node_id = memory_nodes.id
+            ORDER BY memory_nodes.created_at DESC, memory_nodes.id ASC
+            """,
+            (node_id, node_id),
+        ).fetchall()
+        return [self._node_from_row(row) for row in rows]
+
     def retrieve(
         self,
         query: str,

@@ -70,7 +70,7 @@ def save_memory_context(state: ButlerState, memory: MemoryStore) -> ButlerState:
 
 
 def _model_messages(state: ButlerState) -> list[ChatMessage]:
-    messages: list[ChatMessage] = [{"role": "system", "content": "You are Copy_Myself, a concise local-first personal assistant. Answer in the user's language."}]
+    messages: list[ChatMessage] = [{"role": "system", "content": "You are Copy_Myself, a concise local-first personal assistant. Answer in the user's language. Use an existing tool when possible. If no available tool can fulfill a concrete request, you may call builtin__create_tool once with a complete versioned Python or Node stdio MCP server, exact dependency versions, declared capabilities, and a next_call for the original request. Do not create tools for ordinary conversation."}]
     if state["memory_context"]:
         messages.append({"role": "system", "content": "Relevant memory:\n" + "\n".join(state["memory_context"])})
     messages.append({"role": "user", "content": state["user_input"]})
@@ -104,7 +104,15 @@ async def run_selected_tool(state: ButlerState, coordinator: ToolExecutionCoordi
     try:
         payload = await coordinator.execute(state["tool_name"], state.get("tool_arguments", {}), state["session_id"])
         if payload.get("code") == "ok":
-            state["tool_result"] = payload.get("result")
+            result = payload.get("result")
+            next_call = result.get("next_call") if isinstance(result, dict) else None
+            if state["tool_name"] == "builtin__create_tool" and isinstance(next_call, dict) and isinstance(next_call.get("name"), str):
+                follow_up = await coordinator.execute(next_call["name"], next_call.get("arguments", {}), state["session_id"])
+                if follow_up.get("code") != "ok":
+                    state["error"] = follow_up.get("code", "tool_call_failed")
+                    return state
+                result = follow_up.get("result")
+            state["tool_result"] = result
             state["error"] = None
         else:
             state["error"] = payload.get("code", "tool_call_failed")

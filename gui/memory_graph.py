@@ -7,13 +7,14 @@ from typing import Any
 from PyQt6.QtCore import QLineF, Qt
 from PyQt6.QtGui import QBrush, QColor, QPainter, QPen
 from PyQt6.QtWidgets import (
+    QDialog,
     QFrame,
     QGraphicsEllipseItem,
     QGraphicsLineItem,
     QGraphicsScene,
-    QGraphicsSimpleTextItem,
     QGraphicsView,
     QLabel,
+    QPushButton,
     QScrollArea,
     QSizePolicy,
     QSplitter,
@@ -25,20 +26,16 @@ from gui.theme import PALETTE, SPACING
 from memory.models import MemoryEdge, MemoryNode
 
 
-GRAPH_NODE_LIMIT = 100
 GRAPH_SCENE_RADIUS = 220.0
-MIN_ZOOM = 0.45
+NODE_POSITION_SPACING = 22.0
+MIN_ZOOM = 0.05
 MAX_ZOOM = 3.5
 ZOOM_STEP = 1.15
 INITIAL_ZOOM = 0.56
 
 
 class MemoryNodeItem(QGraphicsEllipseItem):
-    def __init__(
-        self,
-        node: MemoryNode,
-        on_click: Callable[[str], None],
-    ) -> None:
+    def __init__(self, node: MemoryNode, on_click: Callable[[str], None]) -> None:
         radius = 6.0 + node.importance * 4.0
         super().__init__(-radius, -radius, radius * 2.0, radius * 2.0)
         self.node_id = node.id
@@ -47,12 +44,8 @@ class MemoryNodeItem(QGraphicsEllipseItem):
         self.setAcceptHoverEvents(True)
         self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip(node.user_input.strip() or "暂无用户问题")
         self.setZValue(2)
-
-        label_text = node.summary.strip() or node.user_input.strip() or "未命名记忆"
-        self.label = QGraphicsSimpleTextItem(_compact(label_text, 18), self)
-        self.label.setBrush(QBrush(QColor(PALETTE["graph_text_muted"])))
-        self.label.setPos(radius + SPACING["xs"], -SPACING["sm"])
         self._apply_style()
 
     def set_selected(self, selected: bool) -> None:
@@ -60,14 +53,17 @@ class MemoryNodeItem(QGraphicsEllipseItem):
         self._apply_style()
 
     def _apply_style(self, hovered: bool = False) -> None:
-        selected = self._selected or hovered
-        fill = PALETTE["graph_node_selected"] if selected else PALETTE["graph_node"]
-        outline = PALETTE["graph_text"] if selected else PALETTE["graph_background"]
-        self.setBrush(QBrush(QColor(fill)))
-        self.setPen(QPen(QColor(outline), 1.4 if selected else 0.8))
-        self.label.setBrush(
-            QBrush(QColor(PALETTE["graph_text"] if selected else PALETTE["graph_text_muted"]))
+        active = self._selected or hovered
+        fill = (
+            PALETTE["graph_node_selected"]
+            if self._selected
+            else PALETTE["graph_node_hover"]
+            if hovered
+            else PALETTE["graph_node"]
         )
+        outline = PALETTE["graph_text"] if active else PALETTE["graph_border"]
+        self.setBrush(QBrush(QColor(fill)))
+        self.setPen(QPen(QColor(outline), 1.4 if active else 1.0))
 
     def hoverEnterEvent(self, event: Any) -> None:
         self._apply_style(hovered=True)
@@ -105,10 +101,17 @@ class MemoryGraphView(QGraphicsView):
 
     def set_graph(self, nodes: list[MemoryNode], edges: list[MemoryEdge]) -> None:
         previous_selection = self.selected_node_id
+        initial_graph = not self.node_items
         self.graph_scene.clear()
         self.node_items.clear()
         self.edge_items.clear()
         positions = _node_positions(nodes)
+        radius = _scene_radius(len(nodes))
+        self.setSceneRect(-radius, -radius, radius * 2.0, radius * 2.0)
+        if initial_graph:
+            self.resetTransform()
+            self._zoom = min(INITIAL_ZOOM, 125.0 / radius)
+            self.scale(self._zoom, self._zoom)
 
         for edge in edges:
             start = positions.get(edge.from_node)
@@ -116,18 +119,17 @@ class MemoryGraphView(QGraphicsView):
             if start is None or end is None:
                 continue
             line = QGraphicsLineItem(QLineF(start[0], start[1], end[0], end[1]))
-            alpha = max(70, min(190, int(70 + edge.weight * 120)))
+            alpha = max(52, min(150, int(52 + edge.weight * 98)))
             color = QColor(PALETTE["graph_edge"])
             color.setAlpha(alpha)
-            line.setPen(QPen(color, 0.7 + edge.weight * 0.8))
+            line.setPen(QPen(color, 0.6 + edge.weight * 0.7))
             line.setZValue(0)
             self.graph_scene.addItem(line)
             self.edge_items.append(line)
 
         for node in nodes:
             item = MemoryNodeItem(node, self.select_node)
-            x, y = positions[node.id]
-            item.setPos(x, y)
+            item.setPos(*positions[node.id])
             self.graph_scene.addItem(item)
             self.node_items[node.id] = item
 
@@ -161,40 +163,38 @@ class MemoryDetailPanel(QFrame):
     def __init__(self) -> None:
         super().__init__()
         self.setObjectName("MemoryDetailPanel")
-        self.title_label = QLabel("选择一个记忆节点")
-        self.summary_label = QLabel("点击上方节点查看详情")
-        self.tags_label = QLabel()
-        self.meta_label = QLabel()
-        self.relations_label = QLabel()
-        self.title_label.setObjectName("MemoryDetailTitle")
-        self.summary_label.setObjectName("MemoryDetailSummary")
-        self.tags_label.setObjectName("MemoryDetailMeta")
-        self.meta_label.setObjectName("MemoryDetailMeta")
-        self.relations_label.setObjectName("MemoryDetailRelations")
+        self.user_input_label = QLabel("暂无记忆节点")
+        self.assistant_response_label = QLabel()
+        self.created_at_label = QLabel()
+        self.related_ids_label = QLabel()
+        self.user_input_label.setObjectName("MemoryDetailTitle")
+        self.assistant_response_label.setObjectName("MemoryDetailSummary")
+        self.created_at_label.setObjectName("MemoryDetailMeta")
+        self.related_ids_label.setObjectName("MemoryDetailRelations")
+        self.related_nodes_button = QPushButton("查看关联节点（0）")
+        self.related_nodes_button.setObjectName("DialogSecondaryButton")
+        self.related_nodes_button.setEnabled(False)
 
         content = QWidget()
         content.setObjectName("MemoryDetailContent")
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(
-            SPACING["lg"],
-            SPACING["md"],
-            SPACING["lg"],
-            SPACING["lg"],
+            SPACING["lg"], SPACING["md"], SPACING["lg"], SPACING["lg"]
         )
         content_layout.setSpacing(SPACING["sm"])
         section_label = QLabel("节点详情")
         section_label.setObjectName("MemoryPanelSectionTitle")
         content_layout.addWidget(section_label)
         for label in (
-            self.title_label,
-            self.summary_label,
-            self.tags_label,
-            self.meta_label,
-            self.relations_label,
+            self.user_input_label,
+            self.assistant_response_label,
+            self.created_at_label,
+            self.related_ids_label,
         ):
             label.setWordWrap(True)
             label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             content_layout.addWidget(label)
+        content_layout.addWidget(self.related_nodes_button)
         content_layout.addStretch()
 
         scroll = QScrollArea()
@@ -206,24 +206,64 @@ class MemoryDetailPanel(QFrame):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(scroll)
 
-    def show_node(
-        self,
-        node: MemoryNode,
-        edges: list[MemoryEdge],
-        nodes_by_id: dict[str, MemoryNode],
-    ) -> None:
-        title = node.summary.strip() or node.user_input.strip() or "未命名记忆"
-        user_input = node.user_input.strip() or "暂无用户输入"
-        memory_summary = node.assistant_response.strip() or node.summary.strip() or "暂无摘要"
-        self.title_label.setText(title)
-        self.summary_label.setText(f"用户  {user_input}\n记忆  {memory_summary}")
-        self.tags_label.setText("标签  " + (" · ".join(node.tags) if node.tags else "无"))
-        created_at = node.created_at.replace("T", " ", 1)
-        self.meta_label.setText(f"创建  {created_at}\n来源  {node.source}")
-        relation_lines = _relation_lines(node.id, edges, nodes_by_id)
-        self.relations_label.setText(
-            "关联关系\n" + ("\n".join(relation_lines) if relation_lines else "暂无关联节点")
+    def show_node(self, node: MemoryNode, related_nodes: list[MemoryNode]) -> None:
+        self.user_input_label.setText(
+            f"用户问题\n{node.user_input.strip() or '暂无用户问题'}"
         )
+        self.assistant_response_label.setText(
+            f"助手回答\n{node.assistant_response.strip() or '暂无助手回答'}"
+        )
+        self.created_at_label.setText(
+            f"创建时间\n{node.created_at.replace('T', ' ', 1)}"
+        )
+        related_ids = "\n".join(related.id for related in related_nodes) or "暂无关联节点"
+        self.related_ids_label.setText(f"关联节点\n{related_ids}")
+        self.related_nodes_button.setText(f"查看关联节点（{len(related_nodes)}）")
+        self.related_nodes_button.setEnabled(bool(related_nodes))
+
+
+class RelatedNodesDialog(QDialog):
+    def __init__(self, nodes: list[MemoryNode], parent: QWidget) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("关联节点")
+        self.setModal(True)
+        self.resize(520, 560)
+
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(
+            SPACING["lg"], SPACING["lg"], SPACING["lg"], SPACING["lg"]
+        )
+        content_layout.setSpacing(SPACING["md"])
+        if not nodes:
+            content_layout.addWidget(QLabel("暂无关联节点"))
+        for node in nodes:
+            for title, value in (
+                ("ID", node.id),
+                ("用户问题", node.user_input.strip() or "暂无用户问题"),
+                ("助手回答", node.assistant_response.strip() or "暂无助手回答"),
+                ("创建时间", node.created_at.replace("T", " ", 1)),
+            ):
+                label = QLabel(f"{title}\n{value}")
+                label.setWordWrap(True)
+                label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                content_layout.addWidget(label)
+            separator = QFrame()
+            separator.setFrameShape(QFrame.Shape.HLine)
+            separator.setFrameShadow(QFrame.Shadow.Sunken)
+            content_layout.addWidget(separator)
+        content_layout.addStretch()
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(content)
+        close_button = QPushButton("关闭")
+        close_button.setObjectName("DialogSecondaryButton")
+        close_button.clicked.connect(self.close)
+        layout = QVBoxLayout(self)
+        layout.addWidget(scroll)
+        layout.addWidget(close_button)
 
 
 class MemoryGraphPanel(QFrame):
@@ -233,12 +273,14 @@ class MemoryGraphPanel(QFrame):
         self.nodes: list[MemoryNode] = []
         self.edges: list[MemoryEdge] = []
         self._nodes_by_id: dict[str, MemoryNode] = {}
+        self._related_dialog: RelatedNodesDialog | None = None
         self.setObjectName("MemoryGraphPanel")
         self.setMinimumWidth(318)
         self.setMaximumWidth(372)
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
 
         self.detail_panel = MemoryDetailPanel()
+        self.detail_panel.related_nodes_button.clicked.connect(self._open_related_nodes_dialog)
         self.graph_view = MemoryGraphView(self._show_node)
         graph_frame = QFrame()
         graph_frame.setObjectName("MemoryGraphSurface")
@@ -265,7 +307,7 @@ class MemoryGraphPanel(QFrame):
     def refresh(self) -> None:
         list_nodes = getattr(self.memory, "list_nodes", None)
         list_edges = getattr(self.memory, "list_edges", None)
-        self.nodes = list_nodes(limit=GRAPH_NODE_LIMIT) if callable(list_nodes) else []
+        self.nodes = list_nodes() if callable(list_nodes) else []
         self.edges = list_edges() if callable(list_edges) else []
         self._nodes_by_id = {node.id: node for node in self.nodes}
         self.graph_view.set_graph(self.nodes, self.edges)
@@ -273,46 +315,44 @@ class MemoryGraphPanel(QFrame):
     def _show_node(self, node_id: str) -> None:
         node = self._nodes_by_id.get(node_id)
         if node is not None:
-            self.detail_panel.show_node(node, self.edges, self._nodes_by_id)
+            self.detail_panel.show_node(node, self._related_nodes(node_id))
+
+    def _related_nodes(self, node_id: str) -> list[MemoryNode]:
+        get_related_nodes = getattr(self.memory, "get_related_nodes", None)
+        if callable(get_related_nodes):
+            return get_related_nodes(node_id)
+        related_ids: set[str] = set()
+        for edge in self.edges:
+            if edge.from_node == node_id:
+                related_ids.add(edge.to_node)
+            elif edge.to_node == node_id:
+                related_ids.add(edge.from_node)
+        related = sorted(
+            (self._nodes_by_id[node_id] for node_id in related_ids if node_id in self._nodes_by_id),
+            key=lambda node: node.id,
+        )
+        return sorted(related, key=lambda node: node.created_at, reverse=True)
+
+    def _open_related_nodes_dialog(self) -> None:
+        node_id = self.graph_view.selected_node_id
+        if node_id is None:
+            return
+        self._related_dialog = RelatedNodesDialog(self._related_nodes(node_id), self.window())
+        self._related_dialog.open()
 
 
 def _node_positions(nodes: list[MemoryNode]) -> dict[str, tuple[float, float]]:
-    if not nodes:
-        return {}
     positions: dict[str, tuple[float, float]] = {}
     golden_angle = math.pi * (3.0 - math.sqrt(5.0))
     for index, node in enumerate(nodes):
-        radius = GRAPH_SCENE_RADIUS * math.sqrt((index + 0.5) / len(nodes))
+        radius = NODE_POSITION_SPACING * math.sqrt(index + 0.5)
         angle = index * golden_angle
         positions[node.id] = (math.cos(angle) * radius, math.sin(angle) * radius)
     return positions
 
 
-def _relation_lines(
-    node_id: str,
-    edges: list[MemoryEdge],
-    nodes_by_id: dict[str, MemoryNode],
-) -> list[str]:
-    lines: list[str] = []
-    for edge in edges:
-        if edge.from_node == node_id:
-            other_id = edge.to_node
-        elif edge.to_node == node_id:
-            other_id = edge.from_node
-        else:
-            continue
-        other = nodes_by_id.get(other_id)
-        other_title = (
-            (other.summary.strip() or other.user_input.strip()) if other is not None else other_id
-        )
-        reason = f" · {edge.reason}" if edge.reason else ""
-        lines.append(f"{edge.relation} · {_compact(other_title, 30)}{reason}")
-    return lines
+def _scene_radius(node_count: int) -> float:
+    return max(GRAPH_SCENE_RADIUS, NODE_POSITION_SPACING * math.sqrt(node_count + 0.5) + 32.0)
 
 
-def _compact(value: str, limit: int) -> str:
-    compact = " ".join(value.split())
-    return compact if len(compact) <= limit else compact[: limit - 1] + "…"
-
-
-__all__ = ["MemoryGraphPanel", "MemoryGraphView", "MemoryDetailPanel"]
+__all__ = ["MemoryDetailPanel", "MemoryGraphPanel", "MemoryGraphView"]

@@ -55,6 +55,35 @@ class ConnectionManager:
                 connection.status = "offline"
                 connection.error = str(exc)
 
+    async def add_service(self, settings: McpServiceSettings) -> ServiceConnection:
+        existing = self.connections.get(settings.service_id)
+        if existing is not None and existing.status == "online":
+            return existing
+        connection = ServiceConnection(settings)
+        self.connections[settings.service_id] = connection
+        try:
+            if settings.transport == "stdio":
+                params = StdioServerParameters(command=settings.command, args=list(settings.args), env=self._stdio_env(settings))
+                read, write = await self._stack.enter_async_context(stdio_client(params))
+            elif settings.transport == "streamable_http":
+                http_client = await self._stack.enter_async_context(httpx.AsyncClient(headers=self._resolved_mapping(settings.headers), timeout=settings.timeout_seconds))
+                read, write, _ = await self._stack.enter_async_context(streamable_http_client(settings.endpoint, http_client=http_client))
+            else:
+                raise GatewayError("service_start_failed", f"Unsupported transport: {settings.transport}")
+            session = await self._stack.enter_async_context(ClientSession(read, write))
+            await session.initialize()
+            connection.session = session
+            connection.status = "online"
+        except Exception as exc:
+            connection.status = "offline"
+            connection.error = str(exc)
+        return connection
+
+    async def remove_service(self, service_id: str) -> None:
+        # Contexts are owned by the manager stack and close with the gateway;
+        # removing the catalog handle immediately avoids stale model tools.
+        self.connections.pop(service_id, None)
+
     async def close(self) -> None:
         await self._stack.aclose()
 
@@ -74,7 +103,7 @@ class ConnectionManager:
 
     @staticmethod
     def _stdio_env(settings: McpServiceSettings) -> dict[str, str]:
-        allowed = ("PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "PYTHONPATH", "COPY_MYSELF_FILESYSTEM_ROOTS")
+        allowed = ("PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "PYTHONPATH", "COPY_MYSELF_FILESYSTEM_ROOTS", "COPY_MYSELF_GENERATED_TOOLS_ROOT")
         env = {key: os.environ[key] for key in allowed if key in os.environ}
         env.update(ConnectionManager._resolved_mapping(settings.env))
         return env

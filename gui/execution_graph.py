@@ -137,8 +137,8 @@ class ExecutionGraphDialog(QDialog):
         self.view.fitInView(bounds, Qt.AspectRatioMode.KeepAspectRatio)
 
     def _add_node(self, rect: QRectF, node: ExecutionNode, *, is_last: bool) -> None:
-        border = QColor(PALETTE["primary"] if is_last else "#40504D")
-        fill = QColor("#18312D" if is_last else PALETTE["surface_raised"])
+        border = QColor(PALETTE["primary"] if is_last else PALETTE["border"])
+        fill = QColor(PALETTE["primary_soft"] if is_last else PALETTE["surface"])
         card = QGraphicsRectItem(rect)
         card.setPen(QPen(border, 1.4))
         card.setBrush(fill)
@@ -164,7 +164,7 @@ class ExecutionGraphDialog(QDialog):
         midpoint = (start.x() + end.x()) / 2
         path.cubicTo(midpoint, start.y(), midpoint, end.y(), end.x() - 8, end.y())
         edge = QGraphicsPathItem(path)
-        edge.setPen(QPen(QColor("#52625F"), 1.6))
+        edge.setPen(QPen(QColor(PALETTE["border"]), 1.6))
         self.scene.addItem(edge)
 
         arrow = QGraphicsPolygonItem(
@@ -176,6 +176,6 @@ class ExecutionGraphDialog(QDialog):
                 ]
             )
         )
-        arrow.setPen(QPen(QColor("#52625F"), 1))
-        arrow.setBrush(QColor("#52625F"))
+        arrow.setPen(QPen(QColor(PALETTE["border"]), 1))
+        arrow.setBrush(QColor(PALETTE["border"]))
         self.scene.addItem(arrow)

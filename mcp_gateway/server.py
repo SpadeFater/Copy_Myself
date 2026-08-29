@@ -15,6 +15,7 @@ from .catalog import ToolCatalog, descriptor
 from .connections import ConnectionManager, builtin_service
 from .errors import GatewayError
 from .policy import ToolPolicy
+from builtin_mcp.tools.generated.manager import GeneratedToolManager
 
 APPROVAL_TOOL = "_copy_myself_approval"
 
@@ -29,12 +30,30 @@ class GatewayRuntime:
 
     async def start(self) -> None:
         await self.connections.start()
+        await self.refresh()
+
+    async def refresh(self) -> None:
+        generated = GeneratedToolManager().list_services()
+        generated_ids = {item.service_id for item in generated}
+        known = {item.service_id for item in self.connections.services}
+        for service in generated:
+            if service.service_id not in known:
+                await self.connections.add_service(service)
+        stale_generated: set[str] = set()
+        for service_id, connection in list(self.connections.connections.items()):
+            if connection.settings.metadata.get("_meta", {}).get("copy_myself", {}).get("generated") and service_id not in generated_ids:
+                self.catalog.remove_service(service_id)
+                stale_generated.add(service_id)
+                await self.connections.remove_service(service_id)
         for service_id, connection in self.connections.connections.items():
+            if service_id in stale_generated:
+                continue
             if connection.status != "online":
                 continue
             tools = await self.connections.list_tools(service_id)
-            origin = "builtin" if service_id == "builtin" else "external"
-            self.catalog.replace_service(service_id, [descriptor(service_id, tool, origin=origin) for tool in tools])
+            origin = "builtin" if service_id == "builtin" else ("generated" if connection.settings.metadata.get("_meta", {}).get("copy_myself", {}).get("generated") else "external")
+            metadata = connection.settings.metadata
+            self.catalog.replace_service(service_id, [descriptor(service_id, tool, origin=origin, service_metadata=metadata) for tool in tools])
 
     async def close(self) -> None:
         await self.connections.close()
@@ -76,6 +95,8 @@ class GatewayRuntime:
             if payload is None:
                 payload = {"content": [getattr(part, "text", str(part)) for part in result.content]}
             outcome = "error" if result.isError else "ok"
+            if outcome == "ok" and item.service_id == "builtin" and item.downstream_name == "create_tool":
+                await self.refresh()
             self.audit.record(session_id, item.service_id, item.canonical_name, arguments, outcome, decision)
             return {"code": outcome, "result": payload}
         except TimeoutError as exc:
