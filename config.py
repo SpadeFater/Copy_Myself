@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -114,7 +115,23 @@ def _read_json_records(path: Path) -> list[Mapping[str, Any]]:
 
 def _write_json_records(path: Path, payload: list[dict[str, object]]) -> None:
     _ensure_parent_directory(path)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary_path = path.with_name(f".{path.name}.tmp")
+    temporary_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temporary_path, path)
+
+
+def model_settings_backup_path(path: str | Path | None = None) -> Path:
+    store_path = Path(path) if path is not None else default_model_settings_path()
+    return store_path.with_name(f"{store_path.name}.bak")
+
+
+def backup_model_provider_settings(path: str | Path | None = None) -> Path:
+    store_path = Path(path) if path is not None else default_model_settings_path()
+    backup_path = model_settings_backup_path(store_path)
+    if store_path.exists():
+        _ensure_parent_directory(backup_path)
+        shutil.copy2(store_path, backup_path)
+    return backup_path
 
 
 @dataclass(frozen=True)
@@ -392,6 +409,52 @@ def select_model_provider_model(
         raise ValueError(f"Unknown model provider: {clean_provider_name}")
     save_model_provider_settings([selected, *remaining], store_path)
     return selected
+
+
+def update_model_provider_models(
+    provider_name: str,
+    available_models: Iterable[str],
+    path: str | Path | None = None,
+) -> ModelProviderSettings:
+    clean_provider_name = _clean_text(provider_name)
+    if clean_provider_name is None:
+        raise ValueError("Model provider name is required.")
+
+    store_path = Path(path) if path is not None else default_model_settings_path()
+    providers = list(list_model_provider_settings(store_path))
+    updated: ModelProviderSettings | None = None
+    normalized_models = _coerce_unique_strings(available_models)
+    for index, provider in enumerate(providers):
+        if provider.name != clean_provider_name:
+            continue
+        updated = ModelProviderSettings(
+            name=provider.name,
+            base_url=provider.base_url,
+            model_name=provider.model_name,
+            api_key=provider.api_key,
+            provider=provider.provider,
+            headers=provider.headers,
+            available_models=normalized_models,
+            enabled=provider.enabled,
+        )
+        providers[index] = updated
+        break
+    if updated is None:
+        raise ValueError(f"Unknown model provider: {clean_provider_name}")
+    save_model_provider_settings(providers, store_path)
+    return updated
+
+
+def rollback_model_provider_settings(path: str | Path | None = None) -> tuple[ModelProviderSettings, ...]:
+    store_path = Path(path) if path is not None else default_model_settings_path()
+    backup_path = model_settings_backup_path(store_path)
+    if not backup_path.exists():
+        raise FileNotFoundError(f"No model settings backup found: {backup_path}")
+    _ensure_parent_directory(store_path)
+    temporary_path = store_path.with_name(f".{store_path.name}.rollback.tmp")
+    shutil.copy2(backup_path, temporary_path)
+    os.replace(temporary_path, store_path)
+    return list_model_provider_settings(store_path)
 
 
 def load_mcp_service_settings(path: str | Path | None = None) -> tuple[McpServiceSettings, ...]:

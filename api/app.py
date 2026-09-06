@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.routes.chat import create_router
+from api.routes.models import create_router as create_model_router
 from api.session_store import SessionStore
 from config import load_settings
 from app_logging import configure_logging
@@ -34,6 +35,7 @@ def create_app(session_store: SessionStore | None = None) -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(create_router(active_store), prefix="/api")
+    app.include_router(create_model_router(), prefix="/api")
 
     return app
 

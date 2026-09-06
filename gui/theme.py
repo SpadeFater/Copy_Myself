@@ -10,26 +10,27 @@ class StyleTarget(Protocol):
 
 
 PALETTE = {
-    "window": "#F8F7FC",
+    "window": "#F4FAF8",
     "surface": "#FFFFFF",
-    "surface_raised": "#F3F0FC",
-    "primary": "#7565C8",
-    "primary_hover": "#6656B5",
-    "primary_soft": "#EEEAFB",
-    "focus": "#9181E5",
-    "attention": "#D58D6C",
-    "text": "#29263D",
-    "text_muted": "#716D84",
-    "border": "#DFDBE9",
-    "graph_background": "#29253F",
-    "graph_surface": "#312D4B",
-    "graph_edge": "#5B5577",
-    "graph_node": "#B5B0C7",
-    "graph_node_hover": "#B8ADFA",
-    "graph_node_selected": "#9181E5",
-    "graph_text": "#F3F1FB",
-    "graph_text_muted": "#B7B0D2",
-    "graph_border": "#4D4868",
+    "surface_raised": "#ECF5F3",
+    "primary": "#3F8587",
+    "primary_end": "#79B8C0",
+    "primary_hover": "#347477",
+    "primary_soft": "#E1EFED",
+    "focus": "#6FAEB3",
+    "attention": "#D69A62",
+    "text": "#203136",
+    "text_muted": "#718184",
+    "border": "#D7E6E3",
+    "graph_background": "#234248",
+    "graph_surface": "#2C5157",
+    "graph_edge": "#4C7D82",
+    "graph_node": "#A8C9C9",
+    "graph_node_hover": "#79B8C0",
+    "graph_node_selected": "#D69A62",
+    "graph_text": "#F3FBFA",
+    "graph_text_muted": "#B5CACA",
+    "graph_border": "#477178",
 }
 
 SPACING = {"xs": 4, "sm": 8, "md": 12, "lg": 16, "xl": 24}
@@ -37,7 +38,7 @@ SPACING = {"xs": 4, "sm": 8, "md": 12, "lg": 16, "xl": 24}
 
 WORKBENCH_QSS = f"""
 #WorkbenchRoot, QDialog#SettingsDialog, QDialog#ExecutionGraphDialog {{
-    background: {PALETTE['window']};
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #EAF5F2, stop:0.52 #F8FBFA, stop:1 #F9F4EC);
     color: {PALETTE['text']};
     font-family: "Open Sans", "Segoe UI", "Microsoft YaHei";
     font-size: 13px;
@@ -54,7 +55,7 @@ WORKBENCH_QSS = f"""
 #NavButton {{
     background: transparent;
     border: 1px solid transparent;
-    border-radius: 8px;
+    border-radius: 10px;
     color: {PALETTE['text_muted']};
     padding: 8px;
 }}
@@ -64,7 +65,7 @@ WORKBENCH_QSS = f"""
     color: {PALETTE['primary']};
 }}
 #BrandMark {{
-    background: {PALETTE['primary']};
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {PALETTE['primary']}, stop:1 {PALETTE['primary_end']});
     color: #FFFFFF;
     border-radius: 8px;
     font-size: 13px;
@@ -102,26 +103,48 @@ WORKBENCH_QSS = f"""
     font-weight: 700;
 }}
 #CenterPanel {{ background: transparent; }}
+#WelcomeBand {{ background: transparent; border: none; }}
+#Eyebrow {{ color: {PALETTE['text_muted']}; font-size: 10px; font-weight: 700; letter-spacing: 1px; }}
+#WelcomeTitle {{ color: {PALETTE['text']}; font-size: 25px; font-weight: 600; }}
+#WelcomeNote {{ color: {PALETTE['text_muted']}; font-size: 12px; }}
 #MemoryGraphPanel {{
-    background: {PALETTE['graph_surface']};
+    background: transparent;
     border: none;
-    border-right: 1px solid {PALETTE['graph_border']};
 }}
-#MemoryGraphSurface, #MemoryGraphView {{
+#MemoryGraphSurface {{
+    background: {PALETTE['graph_background']};
+    border: 1px solid {PALETTE['graph_border']};
+    border-radius: 16px;
+}}
+#MemoryGraphView {{
     background: {PALETTE['graph_background']};
     border: none;
 }}
 #MemoryGraphTitle {{
     background: {PALETTE['graph_background']};
     border: none;
-    border-bottom: 1px solid {PALETTE['graph_border']};
     color: {PALETTE['graph_text']};
     font-size: 14px;
     font-weight: 700;
-    padding: {SPACING['md']}px {SPACING['lg']}px;
 }}
-#MemoryDetailPanel, #MemoryDetailContent, #MemoryDetailScroll {{
+#MemorySearchInput {{
+    background: #31565D;
+    border: 1px solid {PALETTE['graph_edge']};
+    border-radius: 8px;
+    color: {PALETTE['graph_text']};
+    padding: 7px 10px;
+    selection-background-color: {PALETTE['graph_border']};
+}}
+#MemorySearchInput:focus {{
+    border-color: {PALETTE['graph_node_hover']};
+}}
+#MemoryDetailPanel {{
     background: {PALETTE['graph_surface']};
+    border: 1px solid {PALETTE['graph_border']};
+    border-radius: 16px;
+}}
+#MemoryDetailContent, #MemoryDetailScroll {{
+    background: transparent;
     border: none;
 }}
 #MemoryPanelSectionTitle {{
@@ -137,10 +160,6 @@ WORKBENCH_QSS = f"""
 #MemoryDetailSummary {{ color: {PALETTE['graph_text']}; }}
 #MemoryDetailMeta {{ color: {PALETTE['graph_text_muted']}; }}
 #MemoryDetailRelations {{ color: {PALETTE['graph_text']}; }}
-#MemoryPanelSplitter::handle {{
-    background: {PALETTE['graph_edge']};
-    height: 1px;
-}}
 #MemoryDetailPanel QPushButton#DialogSecondaryButton {{
     background: #403B61;
     border-color: {PALETTE['graph_edge']};
@@ -156,13 +175,13 @@ WORKBENCH_QSS = f"""
     color: {PALETTE['graph_text_muted']};
 }}
 #HeaderBand, #StageBand, #SettingsStatus, #SettingsSection {{
-    background: {PALETTE['surface']};
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #FFFFFF, stop:0.52 #F1F9F7, stop:1 #FFF9F1);
     border: none;
 }}
 #Composer {{
-    background: {PALETTE['surface']};
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #FFFFFF, stop:0.52 #F3FAF8, stop:1 #FFF9F2);
     border: 1px solid {PALETTE['border']};
-    border-radius: 14px;
+    border-radius: 16px;
 }}
 #Title {{ color: {PALETTE['text']}; font-size: 23px; font-weight: 700; }}
 #PanelTitle, #SectionTitle, #DialogTitle {{
@@ -176,7 +195,15 @@ WORKBENCH_QSS = f"""
     font-size: 14px;
     font-weight: 700;
 }}
-#StatusDot {{ background: {PALETTE['primary']}; border-radius: 4px; }}
+#AgentStatus {{
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #EEF8F6, stop:1 #F3F8FA);
+    border: 1px solid #D7E9E6;
+    border-radius: 12px;
+}}
+#StatusValue {{ color: {PALETTE['text_muted']}; font-size: 12px; }}
+#StatusValue[ready="true"] {{ color: #4A856E; }}
+#StatusDot {{ background: {PALETTE['attention']}; border-radius: 4px; }}
+#StatusDot[ready="true"] {{ background: #4A856E; }}
 #ToolChip {{
     background: {PALETTE['surface_raised']};
     border: 1px solid transparent;
@@ -187,7 +214,7 @@ WORKBENCH_QSS = f"""
 }}
 #ToolChip:hover {{ background: {PALETTE['primary_soft']}; border-color: {PALETTE['border']}; color: {PALETTE['primary']}; }}
 #ToolChip:pressed {{ background: {PALETTE['primary_soft']}; }}
-#ChatList, #StageList, #PlanList, #MemoryContextList, #MemoryMessageList, #MemoryDetail,
+#ChatList, #StageList, #MemoryContextList, #MemoryMessageList, #MemoryDetail,
 #ModelProviderList, #McpServiceList {{
     background: {PALETTE['surface']};
     border: 1px solid {PALETTE['border']};
@@ -202,28 +229,33 @@ WORKBENCH_QSS = f"""
     border-radius: 0;
     padding: 14px 0;
 }}
+#StageList {{
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #FFFFFF, stop:0.55 #F1F9F7, stop:1 #FFF9F1);
+}}
 #MemoryDetail {{
     selection-background-color: {PALETTE['primary_soft']};
 }}
 #ChatList::item, #StageList::item {{ background: transparent; border: none; padding: 3px 0; }}
-#PlanList::item, #MemoryContextList::item, #MemoryMessageList::item,
+#MemoryContextList::item, #MemoryMessageList::item,
 #ModelProviderList::item, #McpServiceList::item {{
     border-bottom: 1px solid {PALETTE['border']};
     padding: 8px 6px;
 }}
-#PlanList::item:selected, #MemoryContextList::item:selected, #MemoryMessageList::item:selected,
+#MemoryContextList::item:selected, #MemoryMessageList::item:selected,
 #ModelProviderList::item:selected, #McpServiceList::item:selected {{
     background: {PALETTE['primary_soft']};
     color: {PALETTE['text']};
 }}
 #UserMessage, #AssistantMessage {{ border-radius: 10px; }}
-#UserMessage {{ background: {PALETTE['primary_soft']}; border: 1px solid #DDD7F5; }}
-#AssistantMessage {{ background: {PALETTE['surface']}; border: 1px solid {PALETTE['border']}; }}
+#UserMessage {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {PALETTE['primary']}, stop:1 {PALETTE['primary_end']}); border: 1px solid {PALETTE['primary']}; }}
+#AssistantMessage {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #FFFFFF, stop:0.55 #F1F8F7, stop:1 #FFF9F1); border: 1px solid {PALETTE['border']}; }}
 #MessageText {{ background: transparent; border: none; color: {PALETTE['text']}; }}
 #ExecutionStep {{ background: transparent; border: none; }}
+#ExecutionStep[active="true"] {{ background: #E7F3F0; border-radius: 10px; }}
+#ExecutionStep[active="true"] #StepName {{ color: {PALETTE['primary']}; }}
 #StepBadge {{
     background: {PALETTE['primary_soft']};
-    border: 1px solid #D8D1F3;
+    border: 1px solid #CFE4E1;
     border-radius: 10px;
     color: {PALETTE['primary']};
     font-size: 10px;
@@ -232,22 +264,34 @@ WORKBENCH_QSS = f"""
 #StepName {{ color: {PALETTE['text']}; font-weight: 600; }}
 #StepMeta {{ color: {PALETTE['text_muted']}; font-size: 10px; }}
 #Inspector {{
-    background: {PALETTE['surface_raised']};
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #EAF5F2, stop:1 #F8F2EA);
     border: none;
     border-left: 1px solid {PALETTE['border']};
 }}
-#ExecutionGraphButton, #PrimaryButton, QPushButton#DialogPrimaryButton {{
-    background: {PALETTE['primary']};
+#IntentCard {{
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #FFFFFF, stop:0.55 #F1F9F7, stop:1 #FFF9F1);
+    border: 1px solid {PALETTE['border']};
+    border-radius: 14px;
+}}
+#IntentEyebrow {{
+    color: {PALETTE['attention']};
+    font-size: 10px;
+    font-weight: 700;
+}}
+#IntentTitle {{ color: {PALETTE['text']}; font-size: 12px; font-weight: 700; }}
+#IntentValue {{ color: {PALETTE['primary']}; font-size: 16px; font-weight: 700; }}
+#PrimaryButton, QPushButton#DialogPrimaryButton {{
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {PALETTE['primary']}, stop:1 {PALETTE['primary_end']});
     border: 1px solid {PALETTE['primary']};
     border-radius: 6px;
     color: #FFFFFF;
     padding: 8px 13px;
     font-weight: 700;
 }}
-#ExecutionGraphButton:hover, #PrimaryButton:hover, QPushButton#DialogPrimaryButton:hover {{
+#PrimaryButton:hover, QPushButton#DialogPrimaryButton:hover {{
     background: {PALETTE['primary_hover']};
 }}
-#ExecutionGraphButton:disabled, #PrimaryButton:disabled {{
+#PrimaryButton:disabled {{
     background: #DDD9EA;
     border-color: #DDD9EA;
     color: #817B93;
@@ -278,17 +322,39 @@ WORKBENCH_QSS = f"""
     outline: 2px solid {PALETTE['focus']};
     outline-offset: 0;
 }}
-#ComposerModelSelector {{
-    background: {PALETTE['surface_raised']};
-    border: 1px solid {PALETTE['border']};
-    border-radius: 10px;
+QComboBox#ComposerModelSelector {{
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #F7FCFB, stop:1 #EEF6F5);
+    border: 1px solid #CFE2DF;
+    border-radius: 12px;
     color: {PALETTE['text']};
-    padding: 5px 10px;
+    padding: 6px 34px 6px 12px;
+    font-size: 12px;
+    font-weight: 600;
 }}
-#ComposerModelSelector:focus {{
+QComboBox#ComposerModelSelector:hover {{
+    background: #F4FBF9;
     border-color: {PALETTE['focus']};
-    outline: 2px solid {PALETTE['focus']};
+}}
+QComboBox#ComposerModelSelector:focus {{
+    border-color: {PALETTE['focus']};
+    outline: 2px solid rgba(111, 174, 179, 0.22);
     outline-offset: 0;
+}}
+QComboBox#ComposerModelSelector::drop-down {{
+    width: 28px;
+    border: none;
+    border-left: 1px solid #D7E6E3;
+    border-top-right-radius: 12px;
+    border-bottom-right-radius: 12px;
+}}
+QComboBox#ComposerModelSelector QAbstractItemView {{
+    background: #FFFFFF;
+    border: 1px solid {PALETTE['border']};
+    border-radius: 8px;
+    color: {PALETTE['text']};
+    padding: 4px;
+    selection-background-color: {PALETTE['primary_soft']};
+    selection-color: {PALETTE['text']};
 }}
 #ComposerGhostButton {{
     background: transparent;
@@ -305,13 +371,24 @@ QTabWidget#SettingsTabs::pane {{
     top: -1px;
 }}
 QTabWidget#SettingsTabs QTabBar::tab {{
-    background: transparent;
+    background: #EEF6F4;
+    border: 1px solid transparent;
+    border-radius: 9px;
     color: {PALETTE['text_muted']};
-    padding: 8px 18px;
+    margin: 3px 8px 3px 0;
+    min-width: 112px;
+    padding: 10px 14px;
+    text-align: left;
+}}
+QTabWidget#SettingsTabs QTabBar {{
+    qproperty-drawBase: 0;
+    background: transparent;
 }}
 QTabWidget#SettingsTabs QTabBar::tab:selected {{
+    background: {PALETTE['primary_soft']};
     color: {PALETTE['primary']};
-    border-bottom: 2px solid {PALETTE['primary']};
+    border-color: #CFE4E1;
+    font-weight: 700;
 }}
 QScrollBar:vertical {{ background: transparent; width: 8px; margin: 2px; }}
 QScrollBar::handle:vertical {{ background: #CBC5DD; min-height: 28px; border-radius: 4px; }}

@@ -127,6 +127,15 @@ $env:COPY_MYSELF_MCP_SERVICES_PATH = "C:\path\to\mcp_services.json"
 
 外部 MCP 服务需要稳定且唯一的 `service_id`，可使用 `stdio` 或 `streamable_http` 传输方式，并配置命令与参数或服务端点、可选请求头/环境变量及超时。`builtin` 为保留 ID，不能由用户配置。
 
+已保存的模型配置可以重新探测上游模型目录。GUI 的“设置 -> 模型”中选中配置后点击“更新上游模型”；命令行可使用：
+
+```powershell
+copy-myself models refresh "provider name" --json
+copy-myself models rollback --json
+```
+
+本地 API 提供 `POST /api/models/{provider_name}/refresh` 和 `POST /api/models/rollback`。刷新会更新 `available_models`，保留当前模型；如果当前模型下线或验证失败，会在结果中标记不可用而不会自动切换。刷新前的完整配置保存在 `models.json.bak`，可通过 GUI、API 或 CLI 回滚。
+
 当某个外部服务离线时，网关会将其隔离，其余工具与普通对话仍可使用。
 
 ## Generated MCP tools.

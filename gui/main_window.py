@@ -4,13 +4,13 @@ import asyncio
 from urllib.parse import urlparse
 from uuid import uuid4
 
-from PyQt6.QtCore import QThread, QTimer, Qt, pyqtSignal
+from PyQt6.QtCore import QThread, QTimer, QSize, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
     QFrame,
-    QHBoxLayout,
     QFormLayout,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -23,6 +23,11 @@ from PyQt6.QtWidgets import (
     QToolButton,
     QVBoxLayout,
     QWidget,
+    QStackedWidget,
+    QStyle,
+    QStyleOptionTab,
+    QStylePainter,
+    QTabBar,
 )
 
 from config import (
@@ -33,14 +38,16 @@ from config import (
     list_mcp_service_settings,
     list_model_provider_settings,
     load_settings,
+    rollback_model_provider_settings,
     select_model_provider_model,
 )
 from llm.openai_compatible import fetch_available_models
+from llm.model_sync import ModelRefreshResult, refresh_model_provider
 from gui.view_model import ChatMessage, RunSummary, WorkbenchViewModel
-from gui.execution_graph import ExecutionGraphDialog
 from gui.memory_graph import MemoryGraphPanel
 from gui.theme import WORKBENCH_QSS, apply_workbench_theme, fluent_icon
 from gui.widgets import (
+    AnimatedGradientFrame,
     MESSAGE_BODY_MAX_HEIGHT,
     ChatListWidget,
     ChatMessageWidget,
@@ -52,11 +59,26 @@ from agent.service import ChatRunResult, ChatService
 THINKING_MESSAGE = "管家正在思考问题..."
 PENDING_RESPONSE_DELAY_MS = 60
 
+STAGE_LABELS = {
+    "load_memory": "读取记忆",
+    "classify_intent": "识别意图",
+    "select_tool": "调用大模型",
+    "run_tool": "调用工具",
+    "create_response": "整理响应",
+    "save_memory": "保存记忆",
+}
+DEFAULT_GRAPH_STEPS = tuple(STAGE_LABELS)
+
+
+def stage_display_name(step_name: str) -> str:
+    return STAGE_LABELS.get(step_name, step_name)
+
 
 class ChatWorker(QThread):
     completed = pyqtSignal(object)
     approval_required = pyqtSignal(object)
     failed = pyqtSignal(str)
+    progress = pyqtSignal(str)
 
     def __init__(self, message: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -75,12 +97,17 @@ class ChatWorker(QThread):
         self._loop = asyncio.get_running_loop()
         service = ChatService()
         try:
+            self.progress.emit("select_tool")
             result = await service.achat(self.message, self.session_id)
             while result.status == "pending_approval" and result.pending_approval is not None:
                 self._decision = self._loop.create_future()
+                self.progress.emit("run_tool")
                 self.approval_required.emit(result.pending_approval)
                 approved = await self._decision
                 result = await service.resume(result.pending_approval.approval_id, approved, self.session_id)
+            if result.tool_result is not None:
+                self.progress.emit("run_tool")
+            self.progress.emit("create_response")
             self.completed.emit(result)
         finally:
             await service.runner.close()
@@ -88,6 +115,37 @@ class ChatWorker(QThread):
     def decide(self, approved: bool) -> None:
         if self._loop is not None and self._decision is not None and not self._decision.done():
             self._loop.call_soon_threadsafe(self._decision.set_result, approved)
+
+
+class ModelRefreshWorker(QThread):
+    completed = pyqtSignal(object)
+    failed = pyqtSignal(str)
+
+    def __init__(self, provider_name: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.provider_name = provider_name
+
+    def run(self) -> None:
+        try:
+            self.completed.emit(refresh_model_provider(self.provider_name))
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+class HorizontalSettingsTabBar(QTabBar):
+    """Keep a west-side settings menu while painting labels left-to-right."""
+
+    def tabSizeHint(self, index: int) -> QSize:
+        size = super().tabSizeHint(index)
+        return QSize(max(112, size.height()), max(40, size.width()))
+
+    def paintEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        painter = QStylePainter(self)
+        for index in range(self.count()):
+            option = QStyleOptionTab()
+            self.initStyleOption(option, index)
+            option.shape = QTabBar.Shape.RoundedNorth
+            painter.drawControl(QStyle.ControlElement.CE_TabBarTab, option)
 
 
 class SettingsDialog(QDialog):
@@ -102,6 +160,8 @@ class SettingsDialog(QDialog):
         self.model_provider_input = QLineEdit("openai-compatible")
         self.available_models_combo = QComboBox()
         self.probe_models_button = QPushButton("探测模型")
+        self.refresh_model_button = QPushButton("更新上游模型")
+        self.rollback_model_button = QPushButton("回滚上次更新")
         self.manual_model_button = QPushButton("手动填写模型名")
         self.import_model_button = QPushButton("保存模型")
         self.delete_model_button = QPushButton("删除模型")
@@ -116,6 +176,9 @@ class SettingsDialog(QDialog):
         self.tabs = QTabWidget()
         self.setObjectName("SettingsDialog")
         self.tabs.setObjectName("SettingsTabs")
+        self.tabs.setTabBar(HorizontalSettingsTabBar())
+        self.tabs.setTabPosition(QTabWidget.TabPosition.West)
+        self.tabs.setDocumentMode(True)
         self.model_providers.setObjectName("ModelProviderList")
         self.mcp_services.setObjectName("McpServiceList")
         for field in (
@@ -133,6 +196,8 @@ class SettingsDialog(QDialog):
         self.mcp_transport_input.setObjectName("SettingsCombo")
         self.available_models_combo.setObjectName("SettingsCombo")
         self.probe_models_button.setObjectName("DialogSecondaryButton")
+        self.refresh_model_button.setObjectName("DialogSecondaryButton")
+        self.rollback_model_button.setObjectName("DialogSecondaryButton")
         self.manual_model_button.setObjectName("DialogSecondaryButton")
         self.import_model_button.setObjectName("DialogPrimaryButton")
         self.delete_model_button.setObjectName("DialogSecondaryButton")
@@ -144,7 +209,10 @@ class SettingsDialog(QDialog):
 
         self._build_ui()
         self.refresh()
+        self._model_refresh_worker: ModelRefreshWorker | None = None
         self.probe_models_button.clicked.connect(self._probe_models)
+        self.refresh_model_button.clicked.connect(self._refresh_selected_model_provider)
+        self.rollback_model_button.clicked.connect(self._rollback_model_settings)
         self.manual_model_button.clicked.connect(lambda checked=False: self._show_manual_model_input(True))
         self.available_models_combo.currentTextChanged.connect(self._apply_probed_model)
         self.import_model_button.clicked.connect(self._import_model)
@@ -207,6 +275,8 @@ class SettingsDialog(QDialog):
         self._set_form_field_hidden(model_form_layout, self.model_id_input, True)
         model_layout.addWidget(model_form)
         model_layout.addWidget(self.probe_models_button)
+        model_layout.addWidget(self.refresh_model_button)
+        model_layout.addWidget(self.rollback_model_button)
         model_layout.addWidget(self.manual_model_button)
         model_layout.addWidget(self.import_model_button)
         model_layout.addWidget(self.delete_model_button)
@@ -342,6 +412,61 @@ class SettingsDialog(QDialog):
         if isinstance(parent, MainWindow):
             parent._refresh_model_selector()
 
+    def _refresh_selected_model_provider(self) -> None:
+        item = self.model_providers.currentItem()
+        provider_name = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        if not provider_name:
+            QMessageBox.warning(self, "更新失败", "请先选择一个已保存的模型配置。")
+            return
+        if self._model_refresh_worker is not None and self._model_refresh_worker.isRunning():
+            return
+        self.refresh_model_button.setEnabled(False)
+        worker = ModelRefreshWorker(str(provider_name), self)
+        self._model_refresh_worker = worker
+        worker.completed.connect(self._on_model_refresh_completed)
+        worker.failed.connect(self._on_model_refresh_failed)
+        worker.finished.connect(lambda: worker.deleteLater())
+        worker.start()
+
+    def _on_model_refresh_completed(self, result: ModelRefreshResult) -> None:
+        self.refresh_model_button.setEnabled(True)
+        self._model_refresh_worker = None
+        self.refresh()
+        parent = self.parent()
+        if isinstance(parent, MainWindow):
+            parent._refresh_model_selector()
+        if result.current_model_available:
+            QMessageBox.information(self, "更新完成", f"已更新 {result.provider.name}，发现 {len(result.models)} 个模型。")
+        else:
+            detail = result.validation_error or "当前模型不在上游模型列表中。"
+            QMessageBox.warning(self, "当前模型不可用", f"已更新 {result.provider.name}，但当前模型不可用：{detail}")
+
+    def _on_model_refresh_failed(self, message: str) -> None:
+        self.refresh_model_button.setEnabled(True)
+        self._model_refresh_worker = None
+        QMessageBox.warning(self, "更新失败", message)
+
+    def _rollback_model_settings(self) -> None:
+        result = QMessageBox.question(
+            self,
+            "回滚模型配置",
+            "确定恢复上一次模型配置吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if result != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            restored = rollback_model_provider_settings()
+        except Exception as exc:
+            QMessageBox.warning(self, "回滚失败", str(exc))
+            return
+        self.refresh()
+        parent = self.parent()
+        if isinstance(parent, MainWindow):
+            parent._refresh_model_selector()
+        QMessageBox.information(self, "回滚完成", f"已恢复 {len(restored)} 个模型配置。")
+
     def _probe_models(self) -> None:
         name = self.model_name_input.text().strip() or "probe"
         base_url = self.model_url_input.text().strip()
@@ -443,37 +568,107 @@ class MainWindow(QMainWindow):
         self.model_selector = QComboBox()
         self.input_box = QLineEdit()
         self.send_button = QPushButton("发送")
-        self.status_value = QLabel("standby")
+        self.status_dot = QLabel()
+        self.status_dot.setObjectName("StatusDot")
+        self.status_dot.setFixedSize(8, 8)
+        self.status_value = QLabel("agent就绪")
+        self.status_value.setObjectName("StatusValue")
+        self.status_badge: QFrame | None = None
         self.execution_list = QListWidget()
         self.execution_list.setObjectName("StageList")
-        self.plan_list = QListWidget()
-        self.plan_list.setObjectName("PlanList")
         self.intent_value = QLabel("standby")
-        self.tool_entry_label = QLabel("可调用工具")
-        self.execution_graph_button = QPushButton("展开流程图")
-        self.execution_graph_button.setObjectName("ExecutionGraphButton")
-        self.execution_graph_button.setIcon(fluent_icon("CODE"))
-        self.execution_graph_dialog: ExecutionGraphDialog | None = None
         self.memory_graph_panel = MemoryGraphPanel(self.view_model.memory)
+        self.main_stack: QStackedWidget | None = None
+        self.inspector_panel: QWidget | None = None
 
         self._build_ui()
         self._connect_events()
         self._refresh_model_selector()
         self._refresh_messages()
         self._refresh_inspector(None)
+        self._set_status("agent就绪", ready=True)
 
     def _build_ui(self) -> None:
-        root = QWidget()
+        root = AnimatedGradientFrame()
         root.setObjectName("WorkbenchRoot")
-        root_layout = QHBoxLayout(root)
+        root_layout = QVBoxLayout(root)
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
 
-        root_layout.addWidget(self.memory_graph_panel)
-        root_layout.addWidget(self._build_center_panel(), stretch=1)
+        root_layout.addWidget(self._build_header())
+
+        content = QHBoxLayout()
+        content.setContentsMargins(0, 0, 0, 0)
+        content.setSpacing(0)
+
+        self.main_stack = QStackedWidget()
+        self.main_stack.setObjectName("MainStack")
+        self.main_stack.addWidget(self._build_center_panel())
+        self.main_stack.addWidget(self._build_memory_workspace())
+        content.addWidget(self.main_stack, stretch=1)
+        self.inspector_panel = self._build_inspector()
+        content.addWidget(self.inspector_panel)
+        root_layout.addLayout(content, stretch=1)
 
         self.setCentralWidget(root)
         apply_workbench_theme(self)
+
+    def _build_header(self) -> QWidget:
+        header = QFrame()
+        header.setObjectName("MinimalHeader")
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(30, 18, 30, 16)
+        header_layout.setSpacing(8)
+
+        brand_column = QVBoxLayout()
+        brand_column.setContentsMargins(0, 0, 0, 0)
+        brand_column.setSpacing(2)
+        brand = QLabel("Copy_Myself")
+        brand.setObjectName("Brand")
+        caption = QLabel("个人智能工作台")
+        caption.setObjectName("BrandCaption")
+        brand_column.addWidget(brand)
+        brand_column.addWidget(caption)
+        header_layout.addLayout(brand_column)
+        header_layout.addStretch()
+
+        header_layout.addWidget(self._nav_button("工作台", "HOME", checked=True))
+        header_layout.addWidget(self._nav_button("记忆图", "LIBRARY"))
+        header_layout.addWidget(self._nav_button("设置", "SETTING"))
+        return header
+
+    def _build_memory_workspace(self) -> QWidget:
+        page = QWidget()
+        page.setObjectName("MemoryWorkspace")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(30, 0, 30, 28)
+        layout.setSpacing(16)
+
+        header = QFrame()
+        header.setObjectName("MemoryWorkspaceHeader")
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(0, 18, 0, 16)
+        title_column = QVBoxLayout()
+        title_column.setContentsMargins(0, 0, 0, 0)
+        title_column.setSpacing(2)
+        title = QLabel("记忆图")
+        title.setObjectName("MemoryWorkspaceTitle")
+        subtitle = QLabel("浏览已保存的上下文与关联节点")
+        subtitle.setObjectName("MemoryWorkspaceSubtitle")
+        title_column.addWidget(title)
+        title_column.addWidget(subtitle)
+        header_layout.addLayout(title_column)
+        header_layout.addStretch()
+        layout.addWidget(header)
+
+        self.memory_graph_panel.setMinimumWidth(0)
+        self.memory_graph_panel.setMaximumWidth(16777215)
+        self.memory_graph_panel.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
+        layout.addWidget(self.memory_graph_panel, stretch=1)
+        return page
 
     def _build_sidebar(self) -> QWidget:
         sidebar = QFrame()
@@ -524,33 +719,37 @@ class MainWindow(QMainWindow):
         panel = QWidget()
         panel.setObjectName("CenterPanel")
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(28, 0, 28, 26)
-        layout.setSpacing(0)
+        layout.setContentsMargins(30, 0, 30, 28)
+        layout.setSpacing(16)
 
-        header = QFrame()
-        header.setObjectName("MinimalHeader")
-        header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(0, 14, 0, 14)
-        header_layout.setSpacing(8)
-
-        brand = QLabel("Copy_Myself")
-        brand.setObjectName("Brand")
-        header_layout.addWidget(brand)
-        header_layout.addStretch()
-
-        nav_icons = {"设置": "SETTING"}
-        for text in ("设置",):
-            button = QToolButton()
-            button.setObjectName("NavButton")
-            button.setIcon(fluent_icon(nav_icons[text]))
-            button.setFixedSize(34, 34)
-            button.setToolTip(text)
-            button.setAccessibleName(text)
-            button.setCursor(Qt.CursorShape.PointingHandCursor)
-            button.clicked.connect(lambda checked=False, name=text: self._handle_nav_click(name))
-            header_layout.addWidget(button)
-            self.nav_buttons[text] = button
-        layout.addWidget(header)
+        welcome = QFrame()
+        welcome.setObjectName("WelcomeBand")
+        welcome_layout = QVBoxLayout(welcome)
+        welcome_layout.setContentsMargins(4, 12, 4, 8)
+        welcome_layout.setSpacing(5)
+        eyebrow = QLabel("PERSONAL BUTLER")
+        eyebrow.setObjectName("Eyebrow")
+        welcome_title = QLabel("今天想一起处理什么？")
+        welcome_title.setObjectName("WelcomeTitle")
+        welcome_note = QLabel("把问题交给 Copy_Myself。它会记住上下文，调用合适的工具，再把结果整理成清晰的一步。")
+        welcome_note.setObjectName("WelcomeNote")
+        welcome_note.setWordWrap(True)
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.addWidget(welcome_title)
+        title_row.addStretch()
+        self.status_badge = QFrame()
+        self.status_badge.setObjectName("AgentStatus")
+        status_layout = QHBoxLayout(self.status_badge)
+        status_layout.setContentsMargins(10, 5, 10, 5)
+        status_layout.setSpacing(6)
+        status_layout.addWidget(self.status_dot)
+        status_layout.addWidget(self.status_value)
+        title_row.addWidget(self.status_badge)
+        welcome_layout.addWidget(eyebrow)
+        welcome_layout.addLayout(title_row)
+        welcome_layout.addWidget(welcome_note)
+        layout.addWidget(welcome)
 
         self.chat_list.setObjectName("ChatList")
         self.chat_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -559,17 +758,17 @@ class MainWindow(QMainWindow):
         composer = QFrame()
         composer.setObjectName("Composer")
         composer_layout = QVBoxLayout(composer)
-        composer_layout.setContentsMargins(10, 10, 10, 10)
-        composer_layout.setSpacing(8)
-        self.input_box.setPlaceholderText("发送消息给 Copy_Myself")
+        composer_layout.setContentsMargins(14, 14, 14, 14)
+        composer_layout.setSpacing(10)
+        self.input_box.setPlaceholderText("告诉 Copy_Myself 你想处理什么...")
         self.input_box.setObjectName("ComposerInput")
         self.input_box.setFixedHeight(42)
         self.model_selector.setObjectName("ComposerModelSelector")
         self.model_selector.setFixedHeight(42)
         self.model_selector.setMinimumWidth(180)
         self.send_button.setObjectName("PrimaryButton")
-        self.send_button.setText("")
-        self.send_button.setFixedSize(42, 42)
+        self.send_button.setText("发送")
+        self.send_button.setFixedHeight(42)
         self.send_button.setIcon(fluent_icon("SEND"))
         bottom_row = QHBoxLayout()
         bottom_row.setContentsMargins(0, 0, 0, 0)
@@ -592,76 +791,52 @@ class MainWindow(QMainWindow):
 
         return panel
 
-        header = QFrame()
-        header.setObjectName("HeaderBand")
-        header_layout = QVBoxLayout(header)
-        header_layout.setContentsMargins(18, 18, 18, 18)
-        header_layout.setSpacing(8)
+    def _nav_button(self, name: str, icon_name: str, *, checked: bool = False) -> QToolButton:
+        button = QToolButton()
+        button.setObjectName("NavButton")
+        button.setText(name)
+        button.setIcon(fluent_icon(icon_name))
+        button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        button.setCheckable(True)
+        button.setChecked(checked)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.clicked.connect(lambda checked=False, nav_name=name: self._handle_nav_click(nav_name))
+        self.nav_buttons[name] = button
+        return button
 
-        title_row = QHBoxLayout()
-        title = QLabel("工作台")
-        title.setObjectName("Title")
-        subtitle = QLabel("本地智能工作台")
-        subtitle.setObjectName("Subtitle")
-        title_row.addWidget(title)
-        title_row.addStretch()
-        title_row.addWidget(subtitle)
-        header_layout.addLayout(title_row)
+    def _show_memory_graph(self) -> None:
+        if self.main_stack is not None:
+            self.main_stack.setCurrentIndex(1)
+        if self.inspector_panel is not None:
+            self.inspector_panel.setVisible(False)
+        self.memory_graph_panel.refresh()
+        self._set_nav_checked("记忆图")
 
-        action_row = QHBoxLayout()
-        action_row.setSpacing(10)
-        self.tool_entry_label.setObjectName("PanelTitle")
-        action_row.addWidget(self.tool_entry_label)
+    def _show_workbench(self) -> None:
+        if self.main_stack is not None:
+            self.main_stack.setCurrentIndex(0)
+        if self.inspector_panel is not None:
+            self.inspector_panel.setVisible(True)
+        self._set_nav_checked("工作台")
 
-        tool_icons = {"内置工具": "DEVELOPER_TOOLS", "MCP 调用": "ROBOT"}
-        for text in ("内置工具", "MCP 调用"):
-            button = QToolButton()
-            button.setText(text)
-            button.setObjectName("ToolChip")
-            button.setIcon(fluent_icon(tool_icons[text]))
-            button.setCursor(Qt.CursorShape.PointingHandCursor)
-            action_row.addWidget(button)
-            self.tool_buttons[text] = button
+    def _set_nav_checked(self, name: str) -> None:
+        for button_name, button in self.nav_buttons.items():
+            button.setChecked(button_name == name)
 
-        action_row.addStretch()
-        header_layout.addLayout(action_row)
-        layout.addWidget(header)
+    def _set_status(self, text: str, *, ready: bool = False) -> None:
+        self.status_value.setText(text)
+        self.status_value.setProperty("ready", ready)
+        self.status_dot.setProperty("ready", ready)
+        self.status_value.style().unpolish(self.status_value)
+        self.status_value.style().polish(self.status_value)
+        self.status_dot.style().unpolish(self.status_dot)
+        self.status_dot.style().polish(self.status_dot)
 
-        stage_band = QFrame()
-        stage_band.setObjectName("StageBand")
-        stage_layout = QHBoxLayout(stage_band)
-        stage_layout.setContentsMargins(18, 16, 18, 16)
-        stage_layout.setSpacing(12)
-
-        stage_label = QLabel("当前阶段")
-        stage_label.setObjectName("PanelTitle")
-        self.status_value.setObjectName("StatusValue")
-        stage_layout.addWidget(stage_label)
-        stage_layout.addWidget(self.status_value)
-        stage_layout.addStretch()
-        layout.addWidget(stage_band)
-
-        chat_label = QLabel("对话")
-        chat_label.setObjectName("PanelTitle")
-        layout.addWidget(chat_label)
-        self.chat_list.setObjectName("ChatList")
-        self.chat_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        layout.addWidget(self.chat_list, stretch=1)
-
-        composer = QFrame()
-        composer.setObjectName("Composer")
-        composer_layout = QHBoxLayout(composer)
-        composer_layout.setContentsMargins(16, 16, 16, 16)
-        composer_layout.setSpacing(10)
-        self.input_box.setPlaceholderText("告诉 Copy_Myself 你想处理什么...")
-        self.input_box.setObjectName("ComposerInput")
-        self.send_button.setObjectName("PrimaryButton")
-        self.send_button.setIcon(fluent_icon("SEND"))
-        composer_layout.addWidget(self.input_box, stretch=1)
-        composer_layout.addWidget(self.send_button)
-        layout.addWidget(composer)
-
-        return panel
+    def _show_progress(self, step_name: str) -> None:
+        self._set_status(f"正在{stage_display_name(step_name)}")
+        self._refresh_inspector(None, active_step=step_name)
+        self.status_value.repaint()
+        self.execution_list.viewport().repaint()
 
     def _build_inspector(self) -> QWidget:
         inspector = QFrame()
@@ -674,21 +849,26 @@ class MainWindow(QMainWindow):
         execution_header = QHBoxLayout()
         execution_header.addWidget(self._section_title("执行阶段"))
         execution_header.addStretch()
-        execution_header.addWidget(self.execution_graph_button)
         layout.addLayout(execution_header)
         self.execution_list.setObjectName("StageList")
         self.execution_list.setMinimumHeight(170)
         layout.addWidget(self.execution_list)
 
-        layout.addWidget(self._section_title("计划列表"))
-        self.plan_list.setObjectName("PlanList")
-        self.plan_list.setMinimumHeight(180)
-        layout.addWidget(self.plan_list)
-
-        layout.addWidget(self._section_title("当前意图"))
+        intent_card = QFrame()
+        intent_card.setObjectName("IntentCard")
+        intent_layout = QVBoxLayout(intent_card)
+        intent_layout.setContentsMargins(14, 14, 14, 14)
+        intent_layout.setSpacing(8)
+        intent_eyebrow = QLabel("任务理解")
+        intent_eyebrow.setObjectName("IntentEyebrow")
+        intent_title = self._section_title("我理解你想做的是……")
+        intent_title.setObjectName("IntentTitle")
+        intent_layout.addWidget(intent_eyebrow)
+        intent_layout.addWidget(intent_title)
         self.intent_value.setObjectName("IntentValue")
         self.intent_value.setWordWrap(True)
-        layout.addWidget(self.intent_value)
+        intent_layout.addWidget(self.intent_value)
+        layout.addWidget(intent_card)
 
         layout.addStretch()
         return inspector
@@ -702,11 +882,15 @@ class MainWindow(QMainWindow):
         self.send_button.clicked.connect(self._send_message)
         self.input_box.returnPressed.connect(self._send_message)
         self.model_selector.currentIndexChanged.connect(self._select_chat_model)
-        self.execution_graph_button.clicked.connect(self._open_execution_graph_dialog)
 
     def _handle_nav_click(self, name: str) -> None:
-        for button_name, button in self.nav_buttons.items():
-            button.setChecked(button_name == name)
+        self._set_nav_checked(name)
+        if name == "工作台":
+            self._show_workbench()
+            return
+        if name == "记忆图":
+            self._show_memory_graph()
+            return
         if name == "设置":
             self._open_settings_dialog()
 
@@ -747,12 +931,12 @@ class MainWindow(QMainWindow):
             self.settings_dialog.refresh()
 
     def _select_builtin_tools(self) -> None:
-        self.status_value.setText("builtin tools")
-        self.intent_value.setText("内置工具入口已就绪")
+        self._set_status("内置工具入口已就绪", ready=True)
+        self.intent_value.setText("内置工具入口")
 
     def _select_mcp_tools(self) -> None:
-        self.status_value.setText("mcp tools")
-        self.intent_value.setText("MCP 调用入口已就绪")
+        self._set_status("MCP 调用入口已就绪", ready=True)
+        self.intent_value.setText("MCP 调用入口")
 
     def _send_message(self) -> None:
         self._finish_response_stream()
@@ -763,7 +947,7 @@ class MainWindow(QMainWindow):
         self._pending_message = clean_message
         self.view_model.messages.append(ChatMessage(role="user", content=clean_message))
         self.view_model.messages.append(ChatMessage(role="assistant", content=THINKING_MESSAGE))
-        self.status_value.setText(THINKING_MESSAGE)
+        self._show_progress("select_tool")
         self.send_button.setEnabled(False)
         self.input_box.setEnabled(False)
         self._refresh_messages()
@@ -779,6 +963,7 @@ class MainWindow(QMainWindow):
         worker.completed.connect(self._complete_worker_result)
         worker.approval_required.connect(self._show_approval_dialog)
         worker.failed.connect(self._complete_worker_error)
+        worker.progress.connect(self._show_progress)
         worker.finished.connect(worker.deleteLater)
         worker.start()
 
@@ -790,7 +975,7 @@ class MainWindow(QMainWindow):
             response=result.response,
             intent=result.intent,
             display_intent=result.display_intent,
-            stage_label=result.display_intent,
+            stage_label="agent就绪",
             tool_result=result.tool_result,
             memory_context=result.memory_context,
             graph_steps=result.graph_steps,
@@ -804,7 +989,7 @@ class MainWindow(QMainWindow):
         self.input_box.setEnabled(True)
         self.memory_graph_panel.refresh()
         self._refresh_inspector(summary)
-        self.status_value.setText(summary.stage_label)
+        self._set_status(summary.stage_label, ready=True)
         self._start_response_stream(summary.response)
 
     def _complete_worker_error(self, message: str) -> None:
@@ -813,7 +998,7 @@ class MainWindow(QMainWindow):
             self.view_model.messages[-1] = ChatMessage(role="assistant", content=message)
         self.send_button.setEnabled(True)
         self.input_box.setEnabled(True)
-        self.status_value.setText("failed")
+        self._set_status("链路失败，请检查模型或工具配置")
         self._refresh_messages()
 
     def _show_approval_dialog(self, pending) -> None:
@@ -886,39 +1071,33 @@ class MainWindow(QMainWindow):
         self._stream_text = ""
         self._stream_index = 0
 
-    def _refresh_inspector(self, summary: RunSummary | None) -> None:
+    def _refresh_inspector(
+        self,
+        summary: RunSummary | None,
+        *,
+        active_step: str | None = None,
+    ) -> None:
         self.execution_list.clear()
-        steps = summary.graph_steps if summary else [
-            "load_memory",
-            "classify_intent",
-            "run_tool",
-            "create_response",
-        ]
+        steps = list(summary.graph_steps if summary else DEFAULT_GRAPH_STEPS)
+        has_tool = bool(summary and summary.tool_result is not None)
         for index, step in enumerate(steps, start=1):
             item = QListWidgetItem()
-            widget = ExecutionStepWidget(index, step, active=summary is not None and index == len(steps))
+            is_active = summary is None and step == active_step
+            display_name = "无需调用工具" if summary and not has_tool and step == "run_tool" else stage_display_name(step)
+            if summary:
+                meta_text = "已跳过" if not has_tool and step == "run_tool" else "已完成"
+            else:
+                meta_text = "当前节点" if is_active else "等待请求" if active_step is None else "待执行"
+            widget = ExecutionStepWidget(
+                index,
+                display_name,
+                active=is_active,
+                meta_text=meta_text,
+            )
             self.execution_list.addItem(item)
             self.execution_list.setItemWidget(item, widget)
             item.setSizeHint(widget.sizeHint())
-
-        self.plan_list.clear()
-        for item in self._build_plan_items(summary):
-            self.plan_list.addItem(item)
-
-        self.intent_value.setText(summary.display_intent if summary else "standby")
-
-    def _build_plan_items(self, summary: RunSummary | None) -> list[str]:
-        if summary:
-            return [
-                "1. 识别当前任务",
-                "2. 选择内置工具或 MCP",
-                "3. 汇总结果并生成响应",
-            ]
-        return [
-            "1. 等待输入",
-            "2. 进入执行阶段",
-            "3. 记忆图将在保存后自动更新",
-        ]
+        self.intent_value.setText(summary.display_intent if summary else "暂无任务")
 
     def _open_settings_dialog(self) -> None:
         if self.settings_dialog is None:
@@ -927,25 +1106,5 @@ class MainWindow(QMainWindow):
         self.settings_dialog.show()
         self.settings_dialog.raise_()
         self.settings_dialog.activateWindow()
-
-    def _open_execution_graph_dialog(self) -> None:
-        steps = (
-            self.view_model.latest_run.graph_steps
-            if self.view_model.latest_run is not None
-            else [
-                "load_memory",
-                "classify_intent",
-                "run_tool",
-                "create_response",
-            ]
-        )
-        if self.execution_graph_dialog is None:
-            self.execution_graph_dialog = ExecutionGraphDialog(steps, self)
-        else:
-            self.execution_graph_dialog.refresh_steps(steps)
-        self.execution_graph_dialog.show()
-        self.execution_graph_dialog.raise_()
-        self.execution_graph_dialog.activateWindow()
-
 
 STYLESHEET = WORKBENCH_QSS

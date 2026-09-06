@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1)
     session_id: str | None = None
+    model: str | None = None
 
 
 class ChatResponse(BaseModel):
@@ -30,3 +31,15 @@ class StatusResponse(BaseModel):
     name: str
     surface: str
     status: str
+
+
+class ModelRefreshResponse(BaseModel):
+    provider: str
+    models: list[str]
+    current_model: str
+    current_model_available: bool
+    validation_error: str | None = None
+
+
+class ModelRollbackResponse(BaseModel):
+    providers: list[dict[str, Any]]

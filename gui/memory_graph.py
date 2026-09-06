@@ -13,11 +13,12 @@ from PyQt6.QtWidgets import (
     QGraphicsLineItem,
     QGraphicsScene,
     QGraphicsView,
+    QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QSplitter,
     QVBoxLayout,
     QWidget,
 )
@@ -221,6 +222,14 @@ class MemoryDetailPanel(QFrame):
         self.related_nodes_button.setText(f"查看关联节点（{len(related_nodes)}）")
         self.related_nodes_button.setEnabled(bool(related_nodes))
 
+    def clear(self) -> None:
+        self.user_input_label.setText("暂无匹配记忆节点")
+        self.assistant_response_label.clear()
+        self.created_at_label.clear()
+        self.related_ids_label.clear()
+        self.related_nodes_button.setText("查看关联节点（0）")
+        self.related_nodes_button.setEnabled(False)
+
 
 class RelatedNodesDialog(QDialog):
     def __init__(self, nodes: list[MemoryNode], parent: QWidget) -> None:
@@ -272,6 +281,8 @@ class MemoryGraphPanel(QFrame):
         self.memory = memory
         self.nodes: list[MemoryNode] = []
         self.edges: list[MemoryEdge] = []
+        self.filtered_nodes: list[MemoryNode] = []
+        self.filtered_edges: list[MemoryEdge] = []
         self._nodes_by_id: dict[str, MemoryNode] = {}
         self._related_dialog: RelatedNodesDialog | None = None
         self.setObjectName("MemoryGraphPanel")
@@ -286,22 +297,29 @@ class MemoryGraphPanel(QFrame):
         graph_frame.setObjectName("MemoryGraphSurface")
         graph_layout = QVBoxLayout(graph_frame)
         graph_layout.setContentsMargins(0, 0, 0, 0)
+        graph_header = QHBoxLayout()
+        graph_header.setContentsMargins(SPACING["lg"], SPACING["md"], SPACING["lg"], SPACING["md"])
         graph_title = QLabel("记忆图")
         graph_title.setObjectName("MemoryGraphTitle")
-        graph_layout.addWidget(graph_title)
+        self.search_input = QLineEdit()
+        self.search_input.setObjectName("MemorySearchInput")
+        self.search_input.setPlaceholderText("搜索记忆节点...")
+        self.search_input.setClearButtonEnabled(True)
+        self.search_input.setMinimumWidth(240)
+        self.search_input.textChanged.connect(self._apply_search)
+        graph_header.addWidget(graph_title)
+        graph_header.addStretch()
+        graph_header.addWidget(self.search_input)
+        graph_layout.addLayout(graph_header)
         graph_layout.addWidget(self.graph_view, stretch=1)
+        graph_frame.setMinimumHeight(420)
 
-        self.splitter = QSplitter(Qt.Orientation.Vertical)
-        self.splitter.setObjectName("MemoryPanelSplitter")
-        self.splitter.addWidget(graph_frame)
-        self.splitter.addWidget(self.detail_panel)
-        self.splitter.setChildrenCollapsible(False)
-        self.splitter.setStretchFactor(0, 64)
-        self.splitter.setStretchFactor(1, 36)
-        self.splitter.setSizes([640, 360])
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self.splitter)
+        layout.setSpacing(SPACING["lg"])
+        layout.addWidget(graph_frame, stretch=3)
+        self.detail_panel.setMinimumHeight(260)
+        layout.addWidget(self.detail_panel, stretch=2)
         self.refresh()
 
     def refresh(self) -> None:
@@ -310,7 +328,40 @@ class MemoryGraphPanel(QFrame):
         self.nodes = list_nodes() if callable(list_nodes) else []
         self.edges = list_edges() if callable(list_edges) else []
         self._nodes_by_id = {node.id: node for node in self.nodes}
-        self.graph_view.set_graph(self.nodes, self.edges)
+        self._apply_search(self.search_input.text())
+
+    def _apply_search(self, query: str) -> None:
+        needle = query.strip().casefold()
+        if needle:
+            visible_nodes = [
+                node for node in self.nodes if needle in self._node_search_text(node).casefold()
+            ]
+        else:
+            visible_nodes = list(self.nodes)
+        visible_ids = {node.id for node in visible_nodes}
+        visible_edges = [
+            edge
+            for edge in self.edges
+            if edge.from_node in visible_ids and edge.to_node in visible_ids
+        ]
+        self.filtered_nodes = visible_nodes
+        self.filtered_edges = visible_edges
+        self.graph_view.set_graph(visible_nodes, visible_edges)
+        if needle and visible_nodes:
+            self.graph_view.select_node(visible_nodes[0].id)
+        elif not visible_nodes:
+            self.detail_panel.clear()
+
+    @staticmethod
+    def _node_search_text(node: MemoryNode) -> str:
+        return " ".join(
+            (
+                node.user_input,
+                node.assistant_response,
+                node.summary,
+                " ".join(node.tags),
+            )
+        )
 
     def _show_node(self, node_id: str) -> None:
         node = self._nodes_by_id.get(node_id)

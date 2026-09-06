@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from math import ceil
+from math import ceil, sin
 from typing import Protocol
 
-from PyQt6.QtCore import QSize, Qt
+from PyQt6.QtCore import QTimer, QSize, Qt
+from PyQt6.QtGui import QColor, QLinearGradient, QPainter
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -17,6 +18,33 @@ from PyQt6.QtWidgets import (
 
 
 MESSAGE_BODY_MAX_HEIGHT = 420
+
+
+class AnimatedGradientFrame(QFrame):
+    """Subtle animated wash used behind the workbench without affecting child widgets."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._phase = 0.0
+        self._timer = QTimer(self)
+        self._timer.setInterval(90)
+        self._timer.timeout.connect(self._advance)
+        self._timer.start()
+
+    def _advance(self) -> None:
+        self._phase = (self._phase + 0.014) % (2 * 3.141592653589793)
+        self.update()
+
+    def paintEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        drift = (sin(self._phase) + 1.0) / 2.0
+        gradient = QLinearGradient(0, 0, self.width(), self.height())
+        gradient.setColorAt(0.0, QColor("#EAF5F2"))
+        gradient.setColorAt(0.44 + drift * 0.08, QColor("#F8FBFA"))
+        gradient.setColorAt(1.0, QColor("#F9F4EC"))
+        painter.fillRect(self.rect(), gradient)
+        painter.end()
 
 
 class MessageLike(Protocol):
@@ -108,6 +136,7 @@ class ExecutionStepWidget(QFrame):
         step_name: str,
         *,
         active: bool = False,
+        meta_text: str | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -123,7 +152,7 @@ class ExecutionStepWidget(QFrame):
 
         name = QLabel(step_name)
         name.setObjectName("StepName")
-        meta = QLabel("当前节点" if active else "执行节点")
+        meta = QLabel(meta_text or ("当前节点" if active else "执行节点"))
         meta.setObjectName("StepMeta")
 
         text_layout = QVBoxLayout()
